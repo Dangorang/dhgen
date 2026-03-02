@@ -664,7 +664,7 @@ export default function App() {
         {char.statsRolled && (
           <div className="section">
             <div className="section-title">II. Characteristics & Status</div>
-            <div style={{ padding: "10px 12px 4px" }}>
+            <div style={{ padding: "10px 12px 4px", overflowX:"auto"			}}>
               {/* Header */}
               <div className="stat-row" style={{ cursor: "default" }}>
                 <span className="col-head">Characteristic</span>
