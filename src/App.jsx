@@ -1,6 +1,7 @@
 import { useState } from "react";
 import CharacterCreator from "./CharacterCreator";
 import CharacterRoster from "./CharacterRoster";
+import MissionSystem from "./MissionSystem";
 
 function HomeScreen({ onNavigate }) {
   return (
@@ -38,10 +39,10 @@ function HomeScreen({ onNavigate }) {
             View Characters
             <span className="menu-btn-sub">Browse your saved Acolyte roster</span>
           </button>
-          <button className="menu-btn disabled">
-            Missions
-            <span className="menu-btn-sub">Coming soon — deploy your Acolytes</span>
-          </button>
+			<button className="menu-btn" onClick={() => onNavigate("missions")}>
+			  Missions
+			  <span className="menu-btn-sub">Deploy your Acolytes into the field</span>
+			</button>
         </div>
 
         <div style={{ textAlign: "center", marginTop: 60, fontSize: 10, color: "#2a1808", letterSpacing: 3, fontFamily: "Cinzel" }}>
@@ -56,5 +57,7 @@ export default function App() {
   const [screen, setScreen] = useState("home");
   if (screen === "creator") return <CharacterCreator onNavigate={setScreen} />;
   if (screen === "roster") return <CharacterRoster onNavigate={setScreen} />;
+  if (screen === "missions") return <MissionSystem onNavigate={setScreen} />;
+  
   return <HomeScreen onNavigate={setScreen} />;
 }

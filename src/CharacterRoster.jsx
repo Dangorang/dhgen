@@ -1,5 +1,5 @@
 import { useState } from "react";
-
+import {getRank} from "./missionData";
 export default function CharacterRoster({ onNavigate }) {
   const [characters, setCharacters] = useState([]);
 
@@ -75,7 +75,16 @@ export default function CharacterRoster({ onNavigate }) {
                 <div>
                   <div className="card-name">{char.name}</div>
                   <div className="card-sub">{char.gender} · {char.origin} · {char.career}</div>
-                  <div style={{ marginTop: 6, display: "flex", flexWrap: "wrap", gap: 4 }}>
+                  <div style={{ marginTop: 4 }}>
+				  <span style={{ border: "1px solid #4a3010", background: "rgba(90,62,27,0.2)", padding: "3px 10px", fontSize: 10, letterSpacing: 2, color: "#9a7840", marginRight: 6 }}>
+					{getRank(char.xp || 0)}
+				  </span>
+				  <span style={{ border: "1px solid #4a3010", background: "rgba(90,62,27,0.2)", padding: "3px 10px", fontSize: 10, letterSpacing: 2, color: "#9a7840" }}>
+					{char.xp || 0} XP
+				  </span>
+				  {char.kia && <span style={{ border: "1px solid #5a2020", background: "rgba(60,10,10,0.4)", padding: "3px 10px", fontSize: 10, letterSpacing: 2, color: "#c05050", marginLeft: 6 }}>KIA</span>}
+				</div>
+				  <div style={{ marginTop: 6, display: "flex", flexWrap: "wrap", gap: 4 }}>
                     {char.age > 0 && <span className="badge">Age {char.age}</span>}
                     {char.heightDisplay && <span className="badge">{char.heightDisplay}</span>}
                     {char.background && <span className="badge">{char.background}</span>}
