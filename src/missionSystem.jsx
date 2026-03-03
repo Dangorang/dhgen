@@ -47,6 +47,8 @@ export default function MissionSystem({ onNavigate }) {
   const [combatLog, setCombatLog]       = useState([]);
   const [isPlayerTurn, setIsPlayerTurn] = useState(true);
   const [fateSpentInMission, setFateSpentInMission] = useState(false);
+  const [currentCheckIndex, setCurrentCheckIndex] = useState(0);
+  const [checkResults, setCheckResults] = useState([]);
   const combatLogRef = useRef(null);
 
   useEffect(() => {
@@ -77,10 +79,11 @@ export default function MissionSystem({ onNavigate }) {
                 No living Acolytes available for deployment.
               </div>
             )}
-            {liveCharacters.map((char, i) => {
+            {liveCharacters.map((char) => {
               const rank = getRank(char.xp || 0);
+              const originalIdx = characters.findIndex(c => c && c.name === char.name && c.origin === char.origin);
               return (
-                <div key={i} onClick={() => { setSelectedChar(char); setSelectedCharIdx(i); setPhase("select_mission"); }}
+                <div key={originalIdx} onClick={() => { setSelectedChar(char); setSelectedCharIdx(originalIdx); setPhase("select_mission"); }}
                   style={{ border: "1px solid #3a2510", background: "rgba(15,10,4,0.85)", padding: "14px 18px", marginBottom: 10, cursor: "pointer", transition: "border-color 0.2s" }}
                   onMouseEnter={e => e.currentTarget.style.borderColor = "#c09040"}
                   onMouseLeave={e => e.currentTarget.style.borderColor = "#3a2510"}>
@@ -103,10 +106,11 @@ export default function MissionSystem({ onNavigate }) {
                 <div style={{ fontSize: 10, letterSpacing: 3, color: "#5a2020", textTransform: "uppercase", marginBottom: 10, fontFamily: "Cinzel", borderBottom: "1px solid #2a1808", paddingBottom: 6 }}>
                   — KIA —
                 </div>
-                {kiaCharacters.map((char, i) => {
+                {kiaCharacters.map((char) => {
                   const rank = getRank(char.xp || 0);
+                  const originalIdx = characters.findIndex(c => c && c.name === char.name && c.origin === char.origin);
                   return (
-                    <div key={`kia-${i}`}
+                    <div key={`kia-${originalIdx}`}
                       style={{ border: "1px solid #3a2510", background: "rgba(30,10,10,0.4)", padding: "14px 18px", marginBottom: 10, cursor: "not-allowed", opacity: 0.6 }}>
                       <div style={{ fontFamily: "'Cinzel Decorative', serif", fontSize: 15, color: "#704040" }}>{char.name}</div>
                       <div style={{ fontFamily: "'IM Fell English', serif", fontSize: 12, color: "#6a5040", marginTop: 3 }}>
@@ -221,8 +225,39 @@ export default function MissionSystem({ onNavigate }) {
         )}
         
         <div style={{ textAlign: "center" }}>
-          <button onClick={() => startCombat()} style={{ padding: "12px 32px", fontSize: 13, letterSpacing: 3, borderColor: TIER_COLOR[selectedMission.tier], color: TIER_COLOR[selectedMission.tier] }}>
+          <button onClick={() => startMission()} style={{ padding: "12px 32px", fontSize: 13, letterSpacing: 3, borderColor: TIER_COLOR[selectedMission.tier], color: TIER_COLOR[selectedMission.tier] }}>
             ✦ Deploy {selectedChar.name}
+          </button>
+        </div>
+      </Screen>
+    );
+  }
+
+  // ── PHASE: SKILL CHECK ───────────────────────────────────────
+  if (phase === "skill_check") {
+    const currentCheck = selectedMission.checks[currentCheckIndex];
+    const char = selectedChar;
+    
+    return (
+      <Screen onNavigate={onNavigate} title="Skill Check" subtitle={currentCheck.label} onBack={() => { setPhase("briefing"); setCurrentCheckIndex(0); }}>
+        <div style={{ border: "1px solid #3a2510", background: "rgba(15,10,4,0.85)", padding: "20px", marginBottom: 16, textAlign: "center" }}>
+          <div style={{ fontFamily: "'Cinzel Decorative', serif", fontSize: 14, color: "#c09040", marginBottom: 12, letterSpacing: 2 }}>
+            {currentCheck.label}
+          </div>
+          <div style={{ fontFamily: "'IM Fell English', serif", fontSize: 13, color: "#a89070", marginBottom: 16, fontStyle: "italic" }}>
+            {currentCheck.flavor}
+          </div>
+          <div style={{ fontFamily: "'Cinzel', serif", fontSize: 11, color: "#6a5030", marginBottom: 8 }}>
+            {currentCheck.stat} vs Difficulty {currentCheck.difficulty}
+          </div>
+          <div style={{ fontFamily: "'IM Fell English', serif", fontSize: 12, color: "#5a4020" }}>
+            Your {currentCheck.stat}: {char.stats[currentCheck.stat] || 20}
+          </div>
+        </div>
+        
+        <div style={{ textAlign: "center" }}>
+          <button onClick={() => resolveSkillCheck()} style={{ padding: "12px 32px", fontSize: 13, letterSpacing: 3, borderColor: "#6a8060", color: "#80c080" }}>
+            ✦ Attempt Check
           </button>
         </div>
       </Screen>
@@ -231,8 +266,9 @@ export default function MissionSystem({ onNavigate }) {
 
   // ── PHASE: RESULTS ───────────────────────────────────────────
   if (phase === "results") {
-    const passes = results.filter(r => r.passed).length;
-    const fails  = results.filter(r => !r.passed).length;
+    const allResults = checkResults.length > 0 ? checkResults : results;
+    const passes = allResults.filter(r => r.passed).length;
+    const fails  = allResults.filter(r => !r.passed).length;
     const success = passes > fails;
 
     return (
@@ -290,19 +326,21 @@ export default function MissionSystem({ onNavigate }) {
           <div style={{ background: "linear-gradient(90deg,#2a1808,#1a1005,#2a1808)", borderBottom: "1px solid #3a2510", padding: "8px 16px", fontFamily: "'Cinzel Decorative', serif", fontSize: 10, color: "#a07030", letterSpacing: 3 }}>
             — CHECK BY CHECK —
           </div>
-          {results.map((r, i) => (
+          {allResults.map((r, i) => (
             <div key={i} style={{ padding: "10px 16px", borderBottom: "1px solid #1a1005", display: "flex", flexDirection: "column", gap: 4 }}>
               <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
-                <span style={{ fontFamily: "'Cinzel', serif", fontSize: 12, color: "#a89070" }}>{r.label}</span>
+                <span style={{ fontFamily: "'Cinzel', serif", fontSize: 12, color: "#a89070" }}>{r.label} {r.isCombat ? "⚔" : ""}</span>
                 <span style={{ fontFamily: "'Cinzel', serif", fontSize: 13, color: r.passed ? "#6ee7b7" : "#f87171", fontWeight: 600 }}>
                   {r.passed ? "PASS" : "FAIL"}
                 </span>
               </div>
               <div style={{ fontFamily: "'IM Fell English', serif", fontSize: 11, color: "#5a4020", fontStyle: "italic" }}>{r.flavor}</div>
-              <div style={{ fontFamily: "'IM Fell English', serif", fontSize: 11, color: "#6a5030" }}>
-                Rolled {r.roll} vs {r.stat} {r.statValue} (difficulty {r.difficulty}) · margin {r.margin}
-                {r.extreme && <span style={{ color: r.passed ? "#6ee7b7" : "#f87171" }}> · EXTREME</span>}
-              </div>
+              {!r.isCombat && (
+                <div style={{ fontFamily: "'IM Fell English', serif", fontSize: 11, color: "#6a5030" }}>
+                  Rolled {r.roll} vs {r.stat} {r.statValue} (difficulty {r.difficulty}) · margin {r.margin}
+                  {r.extreme && <span style={{ color: r.passed ? "#6ee7b7" : "#f87171" }}> · EXTREME</span>}
+                </div>
+              )}
               {r.injury && (
                 <div style={{ background: "rgba(80,20,20,0.4)", border: "1px solid #5a2020", padding: "6px 10px", fontSize: 11, fontFamily: "'IM Fell English', serif", color: "#c07070" }}>
                   ⚠ Injury: {r.injury.name} — {r.injury.description} ({r.injury.stat} {r.injury.penalty})
@@ -505,6 +543,110 @@ export default function MissionSystem({ onNavigate }) {
     );
   }
 
+  // ── MISSION FLOW FUNCTIONS ───────────────────────────────────
+  function startMission() {
+    setCurrentCheckIndex(0);
+    setCheckResults([]);
+    setPlayerWounds(0);
+    setEncounter(null);
+    setFateSpentInMission(false);
+    
+    // Start with first check
+    const firstCheck = selectedMission.checks[0];
+    if (firstCheck.isCombat) {
+      // Generate encounter for combat checks
+      const environment = getEnvironmentFromMission(selectedMission);
+      const rank = getRank(selectedChar.xp || 0);
+      const missionWithRank = { ...selectedMission, rank };
+      const generatedEncounter = generateEncounter(missionWithRank, environment, rank);
+      setEncounter(generatedEncounter);
+      setEnemyWounds(generatedEncounter.enemies.map(e => e.wounds));
+      setCurrentEnemy(0);
+      setCombatLog([{ type: "system", text: `Combat begins with ${generatedEncounter.enemies.length} enemy/enemies!` }]);
+      setPhase("combat");
+    } else {
+      setPhase("skill_check");
+    }
+  }
+
+  function resolveSkillCheck() {
+    const currentCheck = selectedMission.checks[currentCheckIndex];
+    const char = selectedChar;
+    const statValue = char.stats[currentCheck.stat] || 20;
+    const roll = d100();
+    const passed = roll <= statValue;
+    const margin = passed ? statValue - roll : roll - statValue;
+    const extreme = margin >= 30;
+    
+    const result = {
+      label: currentCheck.label,
+      flavor: currentCheck.flavor,
+      stat: currentCheck.stat,
+      statValue,
+      difficulty: currentCheck.difficulty,
+      roll,
+      passed,
+      margin,
+      extreme,
+      isCombat: false,
+    };
+    
+    const newResults = [...checkResults, result];
+    setCheckResults(newResults);
+    
+    // Check if there are more checks
+    const nextIndex = currentCheckIndex + 1;
+    
+    if (nextIndex < selectedMission.checks.length) {
+      // More checks to go
+      const nextCheck = selectedMission.checks[nextIndex];
+      setCurrentCheckIndex(nextIndex);
+      
+      if (nextCheck.isCombat) {
+        // Generate encounter for next combat check
+        const environment = getEnvironmentFromMission(selectedMission);
+        const rank = getRank(selectedChar.xp || 0);
+        const missionWithRank = { ...selectedMission, rank };
+        const generatedEncounter = generateEncounter(missionWithRank, environment, rank);
+        setEncounter(generatedEncounter);
+        setEnemyWounds(generatedEncounter.enemies.map(e => e.wounds));
+        setCurrentEnemy(0);
+        setCombatLog([{ type: "system", text: `Combat begins with ${generatedEncounter.enemies.length} enemy/enemies!` }]);
+        setPhase("combat");
+      } else {
+        setPhase("skill_check");
+      }
+    } else {
+      // All checks done, show results
+      finishMission(newResults);
+    }
+  }
+
+  function finishMission(results) {
+    const passes = results.filter(r => r.passed).length;
+    const fails = results.filter(r => !r.passed).length;
+    const success = passes > fails;
+    
+    // Calculate XP
+    const totalMargin = results.filter(r => r.passed).reduce((sum, r) => sum + r.margin, 0);
+    const bonusXP = Math.floor(totalMargin / 10) * 10;
+    const baseXP = success ? selectedMission.xpSuccess : selectedMission.xpFailure;
+    const totalXP = success ? baseXP + bonusXP : baseXP;
+    
+    // Update character
+    const newXP = (selectedChar.xp || 0) + totalXP;
+    const { kia, ...charWithoutKia } = selectedChar;
+    updateCharacter(selectedCharIdx, {
+      ...charWithoutKia,
+      wounds: Math.max(1, (selectedChar.wounds || 10) - playerWounds),
+      xp: newXP,
+    });
+    
+    setResults(results);
+    setXpGained(totalXP);
+    setPhase("results");
+  }
+
   // ── COMBAT FUNCTIONS ───────────────────────────────────────────
   function startCombat() {
     setCombatLog([{ type: "system", text: `Combat begins with ${encounter.enemies.length} enemy/enemies!` }]);
@@ -610,27 +752,51 @@ export default function MissionSystem({ onNavigate }) {
 
   function completeMission(victory) {
     const char = selectedChar;
-    const mission = selectedMission;
-    const injuriesList = [];
+    const currentCheck = selectedMission.checks[currentCheckIndex];
     
-    const totalXP = victory ? encounter.totalXP + mission.xpSuccess : mission.xpFailure;
+    // Record combat result
+    const combatResult = {
+      label: currentCheck.label,
+      flavor: victory ? "All enemies defeated" : "Escaped from combat",
+      stat: "WS",
+      statValue: char.stats.WS || 20,
+      difficulty: currentCheck.difficulty,
+      roll: 0,
+      passed: victory,
+      margin: 0,
+      extreme: false,
+      isCombat: true,
+    };
     
-    setResults([{ label: "Combat", flavor: victory ? "All enemies defeated" : "Escaped from combat", stat: "WS", statValue: char.stats.WS || 20, difficulty: 0, roll: 0, passed: victory, margin: 0, extreme: false, isCombat: true }]);
-    setInjuries([]);
-    setXpGained(totalXP);
+    const newResults = [...checkResults, combatResult];
+    setCheckResults(newResults);
     
-    let updatedStats = { ...char.stats };
+    // Check if there are more checks after this combat
+    const nextIndex = currentCheckIndex + 1;
     
-    const newXP = (char.xp || 0) + totalXP;
-    updateCharacter(selectedCharIdx, {
-      ...char,
-      stats: updatedStats,
-      wounds: Math.max(1, (char.wounds || 10) - playerWounds),
-      xp: newXP,
-      injuries: [...(char.injuries || []), ...injuriesList.map(i => i.name)],
-    });
-
-    setPhase("results");
+    if (nextIndex < selectedMission.checks.length && victory) {
+      // More checks to go after combat victory
+      const nextCheck = selectedMission.checks[nextIndex];
+      setCurrentCheckIndex(nextIndex);
+      
+      if (nextCheck.isCombat) {
+        // Generate next combat encounter
+        const environment = getEnvironmentFromMission(selectedMission);
+        const rank = getRank(selectedChar.xp || 0);
+        const missionWithRank = { ...selectedMission, rank };
+        const generatedEncounter = generateEncounter(missionWithRank, environment, rank);
+        setEncounter(generatedEncounter);
+        setEnemyWounds(generatedEncounter.enemies.map(e => e.wounds));
+        setCurrentEnemy(0);
+        setCombatLog([{ type: "system", text: `Combat begins with ${generatedEncounter.enemies.length} enemy/enemies!` }]);
+        setPhase("combat");
+      } else {
+        setPhase("skill_check");
+      }
+    } else {
+      // All checks done, finish mission
+      finishMission(newResults);
+    }
   }
 
   function resetMissionState() {
@@ -641,6 +807,8 @@ export default function MissionSystem({ onNavigate }) {
     setCurrentEnemy(0);
     setIsPlayerTurn(true);
     setFateSpentInMission(false);
+    setCurrentCheckIndex(0);
+    setCheckResults([]);
     setResults([]);
     setInjuries([]);
   }
@@ -785,8 +953,9 @@ export default function MissionSystem({ onNavigate }) {
     setPlayerWounds(newPlayerWounds);
     setIsDead(false);
     
-    // Update character with reduced fate
-    const updated = { ...selectedChar, fate: newFate };
+    // Update character with reduced fate and ensure NOT KIA
+    const { kia, ...charWithoutKia } = selectedChar;
+    const updated = { ...charWithoutKia, fate: newFate };
     updateCharacter(selectedCharIdx, updated);
     
     // Add to combat log
