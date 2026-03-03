@@ -444,7 +444,7 @@ export default function CharacterCreator({onNavigate}) {
   const [stats, setStats] = useState({});
   const [saveMessage, setSaveMessage] = useState("");
   const [showOverwrite, setShowOverwrite] = useState(false);
-  const [overwriteEngry, setOverwriteEntry] = useState(null);
+  const [overwriteEntry, setOverwriteEntry] = useState(null);
   
 	
   const update = useCallback((updater) => {
