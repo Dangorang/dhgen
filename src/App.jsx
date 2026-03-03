@@ -1,7 +1,7 @@
 import { useState } from "react";
 import CharacterCreator from "./CharacterCreator";
 import CharacterRoster from "./CharacterRoster";
-import MissionSystem from "./MissionSystem";
+import MissionSystem from "./missionSystem";
 
 function HomeScreen({ onNavigate }) {
   return (
