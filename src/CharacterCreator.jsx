@@ -442,7 +442,11 @@ function computeStats(char) {
 export default function CharacterCreator({onNavigate}) {
   const [char, setChar] = useState(defaultChar());
   const [stats, setStats] = useState({});
-
+  const [saveMessage, setSaveMessage] = useState("");
+  const [showOverwrite, setShowOverwrite] = useState(false);
+  const [overwriteEngry, setOverwriteEntry] = useState(null);
+  
+	
   const update = useCallback((updater) => {
     setChar(prev => {
       const next = typeof updater === "function" ? updater(prev) : { ...prev, ...updater };
@@ -540,6 +544,53 @@ export default function CharacterCreator({onNavigate}) {
       }));
     }
   }
+function saveCharacter(){
+	if (!char.statsRolled) return;
+	const roster = JSON.parse(localStorage.getItem("dhgen_roster") || "[]");
+
+  const entry = {
+    name: char.name,
+    gender: char.gender,
+    origin: hw?.name || "",
+    career: char.career,
+    background: char.background,
+    age: char.age,
+    heightDisplay: char.heightDisplay,
+    wounds: stats.W?.total || 0,
+    fate: stats.F?.total || 0,
+    insanity: stats.I?.total || 0,
+    corruption: stats.C?.total || 0,
+    stats: {
+      WS: stats.WS?.total || 0,
+      BS: stats.BS?.total || 0,
+      S: stats.S?.total || 0,
+      T: stats.T?.total || 0,
+      Ag: stats.Ag?.total || 0,
+      Int: stats.Int?.total || 0,
+      Per: stats.Per?.total || 0,
+      WP: stats.WP?.total || 0,
+      Fel: stats.Fel?.total || 0,
+    },
+    savedAt: new Date().toLocaleDateString(),
+  };
+
+  if (roster.length < 8) {
+    roster.push(entry);
+    localStorage.setItem("dhgen_roster", JSON.stringify(roster));
+    setSaveMessage("✓ Character saved to roster.");
+  } else {
+    setOverwriteEntry(entry);
+    setShowOverwrite(true);
+  }
+}
+function confirmOverwrite(index) {
+  const roster = JSON.parse(localStorage.getItem("dhgen_roster") || "[]");
+  roster[index] = overwriteEntry;
+  localStorage.setItem("dhgen_roster", JSON.stringify(roster));
+  setShowOverwrite(false);
+  setOverwriteEntry(null);
+  setSaveMessage("✓ Character saved — slot overwritten.");
+}
 
   function randomizeAll() {
     if (!char.homeworldId) {
@@ -602,10 +653,21 @@ export default function CharacterCreator({onNavigate}) {
       `}</style>
 	
       <div style={{ maxWidth: 960, margin: "0 auto", padding: "24px 16px", position: "relative", zIndex: 1 }}>
-        {/* BACK BUTTON */}
-		<div style={{ marginBottom: 16 }}>
-			<button onClick={() => onNavigate("home")}>← Back to Main Menu</button>
-		</div>
+      
+		{/* TOP NAV */}
+<div style={{ marginBottom: 16, display: "flex", gap: 12, alignItems: "center" }}>
+  <button onClick={() => onNavigate("home")}>← Back to Main Menu</button>
+  {char.statsRolled && (
+    <button onClick={saveCharacter} style={{ borderColor: "#4a7a4a", color: "#80c080" }}>
+      ✦ Save Character
+    </button>
+  )}
+  {saveMessage && (
+    <span style={{ fontFamily: "'IM Fell English', serif", fontSize: 12, color: "#50a050" }}>
+      {saveMessage}
+    </span>
+  )}
+</div>
 		{/* HEADER */}
         <div style={{ textAlign: "center", marginBottom: 32, borderBottom: "1px solid #3a2510", paddingBottom: 20 }}>
           <div style={{ fontFamily: "'Cinzel Decorative', serif", fontSize: 28, color: "#c09040", letterSpacing: 6, marginBottom: 4 }}>DARK HERESY</div>
@@ -848,12 +910,52 @@ export default function CharacterCreator({onNavigate}) {
             )}
           </div>
         )}
-
+{char.statsRolled && (
+  <div style={{ textAlign: "center", marginBottom: 16 }}>
+    <button onClick={saveCharacter} style={{ borderColor: "#4a7a4a", color: "#80c080", padding: "10px 28px", fontSize: 12, letterSpacing: 2 }}>
+      ✦ Save Character to Roster
+    </button>
+    {saveMessage && (
+      <div style={{ fontFamily: "'IM Fell English', serif", fontSize: 12, color: "#50a050", marginTop: 8 }}>
+        {saveMessage}
+      </div>
+    )}
+  </div>
+)}
         {/* Footer */}
         <div style={{ textAlign: "center", padding: "16px 0", fontSize: 10, color: "#2a1808", letterSpacing: 3, fontFamily: "Cinzel" }}>
           ✦ IN THE GRIM DARKNESS OF THE FAR FUTURE, THERE IS ONLY WAR ✦
         </div>
       </div>
+	  {/* OVERWRITE MODAL */}
+{showOverwrite && (
+  <div style={{ position: "fixed", inset: 0, background: "rgba(0,0,0,0.85)", zIndex: 100, display: "flex", alignItems: "center", justifyContent: "center", padding: 24 }}>
+    <div style={{ background: "#0f0a04", border: "1px solid #5a3e1b", maxWidth: 500, width: "100%", padding: 0 }}>
+      <div style={{ background: "linear-gradient(90deg, #2a1808, #1a1005, #2a1808)", borderBottom: "1px solid #3a2510", padding: "12px 20px", fontFamily: "'Cinzel Decorative', serif", fontSize: 12, color: "#a07030", letterSpacing: 3 }}>
+        — ROSTER FULL — CHOOSE SLOT TO OVERWRITE —
+      </div>
+      <div style={{ padding: 20 }}>
+        <div style={{ fontFamily: "'IM Fell English', serif", fontSize: 13, color: "#8a7050", marginBottom: 16 }}>
+          Your roster is full. Select an Acolyte to replace with <span style={{ color: "#d4a850" }}>{overwriteEntry?.name}</span>:
+        </div>
+        {JSON.parse(localStorage.getItem("dhgen_roster") || "[]").map((c, i) => (
+          <div key={i} style={{ display: "flex", justifyContent: "space-between", alignItems: "center", padding: "10px 12px", borderBottom: "1px solid #2a1808", fontFamily: "'IM Fell English', serif" }}>
+            <div>
+              <span style={{ color: "#d4a850", fontSize: 14 }}>{c.name}</span>
+              <span style={{ color: "#6a5030", fontSize: 12, marginLeft: 12 }}>{c.origin} · {c.career}</span>
+            </div>
+            <button onClick={() => confirmOverwrite(i)} style={{ borderColor: "#7a3a1b", color: "#c07050", fontSize: 10 }}>
+              Overwrite
+            </button>
+          </div>
+        ))}
+        <div style={{ marginTop: 16, textAlign: "right" }}>
+          <button onClick={() => setShowOverwrite(false)}>Cancel</button>
+        </div>
+      </div>
+    </div>
+  </div>
+)}
     </div>
   );
 }
