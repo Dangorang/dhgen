@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useState, useRef, useEffect } from "react";
 import { MISSIONS, INJURY_TABLE, getRank } from "./missionData";
 import { generateEncounter, getEnvironmentFromMission } from "./enemyData";
 
@@ -37,6 +37,14 @@ export default function MissionSystem({ onNavigate }) {
   const [encounter, setEncounter]       = useState(null);
   const [combatPhase, setCombatPhase]    = useState(null);
   const [combatLog, setCombatLog]       = useState([]);
+  const [isPlayerTurn, setIsPlayerTurn] = useState(true);
+  const combatLogRef = useRef(null);
+
+  useEffect(() => {
+    if (combatLogRef.current) {
+      combatLogRef.current.scrollTop = combatLogRef.current.scrollHeight;
+    }
+  }, [combatLog]);
   const [playerWounds, setPlayerWounds]  = useState(0);
   const [enemyWounds, setEnemyWounds]   = useState([]);
   const [currentEnemy, setCurrentEnemy] = useState(0);
@@ -296,7 +304,7 @@ export default function MissionSystem({ onNavigate }) {
     const allEnemiesDead = enemyWounds.every(w => w <= 0);
     
     return (
-      <Screen onNavigate={onNavigate} title="Combat Encounter" subtitle={currentEnemyData?.name || "Battle"} onBack={() => { setPhase("briefing"); setCombatLog([]); setPlayerWounds(0); setEnemyWounds(encounter?.enemies.map(e => e.wounds) || []); }}>
+      <Screen onNavigate={onNavigate} title="Combat Encounter" subtitle={currentEnemyData?.name || "Battle"} onBack={() => { setPhase("briefing"); setCombatLog([]); setPlayerWounds(0); setEnemyWounds(encounter?.enemies.map(e => e.wounds) || []); setIsPlayerTurn(true); }}>
         {/* Combat Status */}
         <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 16, marginBottom: 16 }}>
           {/* Player Status */}
@@ -340,8 +348,23 @@ export default function MissionSystem({ onNavigate }) {
           </div>
         </div>
         
+        {/* Turn Indicator */}
+        <div style={{ 
+          textAlign: "center", 
+          padding: "10px 16px", 
+          marginBottom: 12, 
+          background: isPlayerTurn ? "rgba(40,80,40,0.3)" : "rgba(80,30,30,0.3)",
+          border: `1px solid ${isPlayerTurn ? "#4a7a4a" : "#7a3a1a"}`,
+          fontFamily: "'Cinzel', serif",
+          fontSize: 13,
+          letterSpacing: 2,
+          color: isPlayerTurn ? "#6ee7b7" : "#f87171"
+        }}>
+          {isPlayerTurn ? "▶ YOUR TURN - CHOOSE AN ACTION" : "⏳ ENEMY TURN..."}
+        </div>
+        
         {/* Combat Log */}
-        <div style={{ border: "1px solid #3a2510", background: "rgba(15,10,4,0.85)", marginBottom: 16, maxHeight: 200, overflowY: "auto" }}>
+        <div ref={combatLogRef} style={{ border: "1px solid #3a2510", background: "rgba(15,10,4,0.85)", marginBottom: 16, maxHeight: 250, overflowY: "auto" }}>
           <div style={{ background: "linear-gradient(90deg,#2a1808,#1a1005,#2a1808)", borderBottom: "1px solid #3a2510", padding: "8px 16px", fontFamily: "'Cinzel Decorative', serif", fontSize: 10, color: "#a07030", letterSpacing: 3 }}>
             — COMBAT LOG —
           </div>
@@ -351,7 +374,18 @@ export default function MissionSystem({ onNavigate }) {
             </div>
           ) : (
             combatLog.map((log, i) => (
-              <div key={i} style={{ padding: "8px 16px", borderBottom: "1px solid #1a1005", fontFamily: "'IM Fell English', serif", fontSize: 12, color: log.type === "player" ? "#6ee7b7" : log.type === "enemy" ? "#f87171" : "#a89070" }}>
+              <div key={i} style={{ 
+                padding: "8px 16px", 
+                borderBottom: "1px solid #1a1005", 
+                fontFamily: "'IM Fell English', serif", 
+                fontSize: 12,
+                background: log.type === "player" ? "rgba(40,80,40,0.2)" : log.type === "enemy" ? "rgba(80,30,30,0.2)" : "transparent",
+                color: log.type === "player" ? "#6ee7b7" : log.type === "enemy" ? "#f87171" : "#a89070",
+                borderLeft: log.type === "player" ? "3px solid #6ee7b7" : log.type === "enemy" ? "3px solid #f87171" : "3px solid #5a3e1b"
+              }}>
+                <span style={{ fontWeight: "bold", marginRight: 8 }}>
+                  {log.type === "player" ? "▶ YOU" : log.type === "enemy" ? "▶ ENEMY" : "◆"}
+                </span>
                 {log.text}
               </div>
             ))
@@ -361,10 +395,28 @@ export default function MissionSystem({ onNavigate }) {
         {/* Combat Actions */}
         {!isDead && !allEnemiesDead && (
           <div style={{ display: "flex", gap: 12, flexWrap: "wrap" }}>
-            <button onClick={() => playerAttack()} style={{ borderColor: "#6a8060", color: "#80c080", padding: "10px 20px" }}>
+            <button 
+              onClick={() => playerAttack()} 
+              disabled={!isPlayerTurn}
+              style={{ 
+                borderColor: isPlayerTurn ? "#6a8060" : "#3a3a3a", 
+                color: isPlayerTurn ? "#80c080" : "#4a4a4a", 
+                padding: "10px 20px",
+                opacity: isPlayerTurn ? 1 : 0.5,
+                cursor: isPlayerTurn ? "pointer" : "not-allowed"
+              }}>
               ⚔ Attack
             </button>
-            <button onClick={() => tryEscape()} style={{ borderColor: "#a07030", color: "#c09040", padding: "10px 20px" }}>
+            <button 
+              onClick={() => tryEscape()} 
+              disabled={!isPlayerTurn}
+              style={{ 
+                borderColor: isPlayerTurn ? "#a07030" : "#3a3a3a", 
+                color: isPlayerTurn ? "#c09040" : "#4a4a4a", 
+                padding: "10px 20px",
+                opacity: isPlayerTurn ? 1 : 0.5,
+                cursor: isPlayerTurn ? "pointer" : "not-allowed"
+              }}>
               🏃 Escape (Ag)
             </button>
           </div>
@@ -402,55 +454,79 @@ export default function MissionSystem({ onNavigate }) {
     setPlayerWounds(0);
     setEnemyWounds(encounter.enemies.map(e => e.wounds));
     setCurrentEnemy(0);
+    setIsPlayerTurn(true);
     setPhase("combat");
   }
 
   function playerAttack() {
+    setIsPlayerTurn(false);
     const char = selectedChar;
     const enemy = encounter.enemies[currentEnemy];
     const ws = char.stats.WS || 20;
     const roll = d100();
     const hit = roll <= ws;
     
-    let log = [{ type: "player", text: `You attack with WS ${ws}... rolled ${roll}. ${hit ? "HIT!" : "MISS!"}` }];
+    let log = [{ type: "player", text: `Attack with WS ${ws}: rolled ${roll} vs ${ws}... ${hit ? "HIT!" : "MISS!"}` }];
+    
+    let enemyDead = false;
+    let nextEnemyIndex = currentEnemy;
     
     if (hit) {
       const dmg = d6() + 3;
       const newEnemyWounds = [...enemyWounds];
       newEnemyWounds[currentEnemy] = Math.max(0, newEnemyWounds[currentEnemy] - dmg);
       setEnemyWounds(newEnemyWounds);
-      log.push({ type: "player", text: `Your attack deals ${dmg} damage! Enemy has ${Math.max(0, newEnemyWounds[currentEnemy])} wounds left.` });
+      log.push({ type: "player", text: `Dealt ${dmg} damage! Enemy: ${Math.max(0, newEnemyWounds[currentEnemy])}/${enemy.wounds} wounds.` });
       
       if (newEnemyWounds[currentEnemy] <= 0) {
-        log.push({ type: "player", text: `The ${enemy.name} falls!` });
-        const nextEnemy = currentEnemy + 1;
-        if (nextEnemy < encounter.enemies.length) {
-          setCurrentEnemy(nextEnemy);
-          log.push({ type: "system", text: `Next enemy approaches: ${encounter.enemies[nextEnemy].name}!` });
+        log.push({ type: "player", text: `The ${enemy.name} is DEFEATED!` });
+        enemyDead = true;
+        nextEnemyIndex = currentEnemy + 1;
+        if (nextEnemyIndex < encounter.enemies.length) {
+          setCurrentEnemy(nextEnemyIndex);
+          log.push({ type: "system", text: `Next: ${encounter.enemies[nextEnemyIndex].name} approaches!` });
         }
       }
     }
     
-    setCombatLog([...combatLog, ...log]);
+    // Log player's action FIRST
+    setCombatLog(prevLog => [...prevLog, ...log]);
     
-    if (enemyWounds[currentEnemy] > 0 || currentEnemy < encounter.enemies.length - 1) {
-      setTimeout(() => enemyTurn(), 500);
+    // Schedule enemy turn AFTER player log is shown
+    const enemyStillAlive = enemyWounds[currentEnemy] > 0 || currentEnemy < encounter.enemies.length - 1;
+    
+    if (enemyStillAlive && !enemyDead) {
+      setTimeout(() => {
+        setIsPlayerTurn(true);
+        enemyTurn();
+      }, 1500);
+    } else if (enemyDead && nextEnemyIndex < encounter.enemies.length) {
+      setTimeout(() => {
+        setIsPlayerTurn(true);
+      }, 1500);
+    } else {
+      setIsPlayerTurn(true);
     }
   }
 
   function tryEscape() {
+    setIsPlayerTurn(false);
     const char = selectedChar;
     const ag = char.stats.Ag || 20;
     const difficulty = 30;
     const roll = d100();
     const success = roll <= ag;
     
+    const log = [{ type: "player", text: `Escape attempt (Ag ${ag}): rolled ${roll}. ${success ? "SUCCESS!" : "FAILED!"}` }];
+    setCombatLog(prevLog => [...prevLog, ...log]);
+    
     if (success) {
-      setCombatLog([...combatLog, { type: "player", text: `You attempt to escape (Ag ${ag})... rolled ${roll}. SUCCESS! You flee the combat.` }]);
-      setTimeout(() => completeMission(false), 1000);
+      setTimeout(() => completeMission(false), 1500);
     } else {
-      setCombatLog([...combatLog, { type: "player", text: `You attempt to escape (Ag ${ag})... rolled ${roll}. FAILED!` }]);
-      setTimeout(() => enemyTurn(), 500);
+      setTimeout(() => {
+        setIsPlayerTurn(true);
+        enemyTurn();
+      }, 1500);
     }
   }
 
@@ -461,16 +537,18 @@ export default function MissionSystem({ onNavigate }) {
     const roll = d100();
     const hit = roll <= ews;
     
-    let log = [{ type: "enemy", text: `${enemy.name} attacks with WS ${ews}... rolled ${roll}. ${hit ? "HIT!" : "MISS!"}` }];
+    let log = [{ type: "enemy", text: `${enemy.name} attacks (WS ${ews}): rolled ${roll} vs ${ews}... ${hit ? "HIT!" : "MISS!"}` }];
     
     if (hit) {
       const dmg = d6() + Math.floor((enemy.stats.S || 20) / 10);
       const newPlayerWounds = playerWounds + dmg;
       setPlayerWounds(newPlayerWounds);
-      log.push({ type: "enemy", text: `The enemy deals ${dmg} damage! You have ${(char.wounds || 10) - newPlayerWounds} wounds left.` });
+      log.push({ type: "enemy", text: `Enemy deals ${dmg} damage! You: ${(char.wounds || 10) - newPlayerWounds}/${char.wounds || 10} wounds.` });
     }
     
-    setCombatLog([...combatLog, ...log]);
+    // Append enemy log using functional update to avoid stale closure
+    setCombatLog(prevLog => [...prevLog, ...log]);
+    setIsPlayerTurn(true);
   }
 
   function completeMission(victory) {
@@ -504,6 +582,7 @@ export default function MissionSystem({ onNavigate }) {
     setPlayerWounds(0);
     setEnemyWounds([]);
     setCurrentEnemy(0);
+    setIsPlayerTurn(true);
     setResults([]);
     setInjuries([]);
   }
