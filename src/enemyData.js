@@ -123,7 +123,7 @@ export function generateEnemy(mission, environment) {
   const statMods = {};
   for (const [stat, base] of Object.entries(baseEnemy.stats)) {
     const mod = Math.floor((difficultyMultiplier - 1) * base * 0.5);
-    statMods[stat] = mod;
+    statMods[stat] = Math.max(1, base + mod);
   }
 
   const wounds = Math.floor(baseEnemy.wounds * difficultyMultiplier);

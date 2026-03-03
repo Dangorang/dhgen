@@ -25,6 +25,14 @@ export default function MissionSystem({ onNavigate }) {
   const [phase, setPhase]               = useState("select_character");
   const [characters, setCharacters]     = useState(() => JSON.parse(localStorage.getItem("dhgen_roster") || "[]"));
   const [selectedChar, setSelectedChar] = useState(null);
+
+  // Refresh characters from localStorage when phase changes to select_character
+  useEffect(() => {
+    if (phase === "select_character") {
+      const freshRoster = JSON.parse(localStorage.getItem("dhgen_roster") || "[]");
+      setCharacters(freshRoster);
+    }
+  }, [phase]);
   const [selectedCharIdx, setSelectedCharIdx] = useState(null);
   const [selectedMission, setSelectedMission] = useState(null);
   const [results, setResults]           = useState([]);
@@ -38,6 +46,7 @@ export default function MissionSystem({ onNavigate }) {
   const [combatPhase, setCombatPhase]    = useState(null);
   const [combatLog, setCombatLog]       = useState([]);
   const [isPlayerTurn, setIsPlayerTurn] = useState(true);
+  const [fateSpentInMission, setFateSpentInMission] = useState(false);
   const combatLogRef = useRef(null);
 
   useEffect(() => {
@@ -52,6 +61,9 @@ export default function MissionSystem({ onNavigate }) {
   // ── PHASE: SELECT CHARACTER ──────────────────────────────────
   if (phase === "select_character") {
     const saved = characters.filter(Boolean);
+    const liveCharacters = saved.filter(c => !c.kia);
+    const kiaCharacters = saved.filter(c => c.kia);
+    
     return (
       <Screen onNavigate={onNavigate} title="Deploy Acolyte" subtitle="Select a character to send on a mission">
         {saved.length === 0 ? (
@@ -59,29 +71,58 @@ export default function MissionSystem({ onNavigate }) {
             No Acolytes on file. Create a character first.
           </div>
         ) : (
-          characters.map((char, i) => {
-            if (!char) return (
-              <div key={i} style={{ border: "1px dashed #2a1808", padding: 16, marginBottom: 10, color: "#3a2810", fontFamily: "'IM Fell English', serif", fontSize: 12, textAlign: "center" }}>— Vacant —</div>
-            );
-            const rank = getRank(char.xp || 0);
-            return (
-              <div key={i} onClick={() => { setSelectedChar(char); setSelectedCharIdx(i); setPhase("select_mission"); }}
-                style={{ border: "1px solid #3a2510", background: "rgba(15,10,4,0.85)", padding: "14px 18px", marginBottom: 10, cursor: "pointer", transition: "border-color 0.2s" }}
-                onMouseEnter={e => e.currentTarget.style.borderColor = "#c09040"}
-                onMouseLeave={e => e.currentTarget.style.borderColor = "#3a2510"}>
-                <div style={{ fontFamily: "'Cinzel Decorative', serif", fontSize: 15, color: "#d4a850" }}>{char.name}</div>
-                <div style={{ fontFamily: "'IM Fell English', serif", fontSize: 12, color: "#8a7050", marginTop: 3 }}>
-                  {char.gender} · {char.origin} · {char.career}
-                </div>
-                <div style={{ marginTop: 6, display: "flex", gap: 8, flexWrap: "wrap" }}>
-                  <Badge>{rank}</Badge>
-                  <Badge>{char.xp || 0} XP</Badge>
-                  <Badge>Wounds {char.wounds}</Badge>
-                  <Badge>Fate {char.fate}</Badge>
-                </div>
+          <>
+            {liveCharacters.length === 0 && kiaCharacters.length > 0 && (
+              <div style={{ textAlign: "center", padding: 20, fontFamily: "'IM Fell English', serif", color: "#5a4020", fontSize: 13, marginBottom: 20, border: "1px solid #3a2510", background: "rgba(15,10,4,0.85)" }}>
+                No living Acolytes available for deployment.
               </div>
-            );
-          })
+            )}
+            {liveCharacters.map((char, i) => {
+              const rank = getRank(char.xp || 0);
+              return (
+                <div key={i} onClick={() => { setSelectedChar(char); setSelectedCharIdx(i); setPhase("select_mission"); }}
+                  style={{ border: "1px solid #3a2510", background: "rgba(15,10,4,0.85)", padding: "14px 18px", marginBottom: 10, cursor: "pointer", transition: "border-color 0.2s" }}
+                  onMouseEnter={e => e.currentTarget.style.borderColor = "#c09040"}
+                  onMouseLeave={e => e.currentTarget.style.borderColor = "#3a2510"}>
+                  <div style={{ fontFamily: "'Cinzel Decorative', serif", fontSize: 15, color: "#d4a850" }}>{char.name}</div>
+                  <div style={{ fontFamily: "'IM Fell English', serif", fontSize: 12, color: "#8a7050", marginTop: 3 }}>
+                    {char.gender} · {char.origin} · {char.career}
+                  </div>
+                  <div style={{ marginTop: 6, display: "flex", gap: 8, flexWrap: "wrap" }}>
+                    <Badge>{rank}</Badge>
+                    <Badge>{char.xp || 0} XP</Badge>
+                    <Badge>Wounds {char.wounds}</Badge>
+                    <Badge>Fate {char.fate}</Badge>
+                  </div>
+                </div>
+              );
+            })}
+            
+            {kiaCharacters.length > 0 && (
+              <div style={{ marginTop: 24 }}>
+                <div style={{ fontSize: 10, letterSpacing: 3, color: "#5a2020", textTransform: "uppercase", marginBottom: 10, fontFamily: "Cinzel", borderBottom: "1px solid #2a1808", paddingBottom: 6 }}>
+                  — KIA —
+                </div>
+                {kiaCharacters.map((char, i) => {
+                  const rank = getRank(char.xp || 0);
+                  return (
+                    <div key={`kia-${i}`}
+                      style={{ border: "1px solid #3a2510", background: "rgba(30,10,10,0.4)", padding: "14px 18px", marginBottom: 10, cursor: "not-allowed", opacity: 0.6 }}>
+                      <div style={{ fontFamily: "'Cinzel Decorative', serif", fontSize: 15, color: "#704040" }}>{char.name}</div>
+                      <div style={{ fontFamily: "'IM Fell English', serif", fontSize: 12, color: "#6a5040", marginTop: 3 }}>
+                        {char.gender} · {char.origin} · {char.career}
+                      </div>
+                      <div style={{ marginTop: 6, display: "flex", gap: 8, flexWrap: "wrap" }}>
+                        <Badge>{rank}</Badge>
+                        <Badge>{char.xp || 0} XP</Badge>
+                        <Badge style={{ borderColor: "#5a2020", color: "#c05050" }}>KIA</Badge>
+                      </div>
+                    </div>
+                  );
+                })}
+              </div>
+            )}
+          </>
         )}
       </Screen>
     );
@@ -429,7 +470,23 @@ export default function MissionSystem({ onNavigate }) {
             <div style={{ fontFamily: "'IM Fell English', serif", fontSize: 13, color: "#b87070", marginBottom: 16 }}>
               {selectedChar.name} has been slain in combat.
             </div>
-            <button onClick={() => { setPhase("select_character"); resetMissionState(); }}>Return to Base</button>
+            {!fateSpentInMission && (selectedChar.fate || 0) > 0 ? (
+              <div>
+                <div style={{ fontFamily: "'IM Fell English', serif", fontSize: 12, color: "#c09040", marginBottom: 12 }}>
+                  The Emperor provides... Spend a Fate Point to survive at 1 HP?
+                </div>
+                <div style={{ display: "flex", gap: 12, justifyContent: "center" }}>
+                  <button onClick={() => spendFateToSurvive()} style={{ borderColor: "#6a8060", color: "#80c080", padding: "10px 20px" }}>
+                    ✦ Spend Fate ({selectedChar.fate} remaining)
+                  </button>
+                  <button onClick={() => confirmDeath()} style={{ borderColor: "#7a3a1b", color: "#c07050", padding: "10px 20px" }}>
+                    Accept Death
+                  </button>
+                </div>
+              </div>
+            ) : (
+              <button onClick={() => { confirmDeath(); setPhase("select_character"); resetMissionState(); }}>Return to Base</button>
+            )}
           </div>
         )}
         
@@ -583,6 +640,7 @@ export default function MissionSystem({ onNavigate }) {
     setEnemyWounds([]);
     setCurrentEnemy(0);
     setIsPlayerTurn(true);
+    setFateSpentInMission(false);
     setResults([]);
     setInjuries([]);
   }
@@ -714,6 +772,25 @@ export default function MissionSystem({ onNavigate }) {
     updateCharacter(selectedCharIdx, updated);
     setFatePrompt(false);
     setIsDead(true);
+  }
+
+  function spendFateToSurvive() {
+    if ((selectedChar.fate || 0) <= 0) return;
+    
+    const newFate = selectedChar.fate - 1;
+    setFateSpentInMission(true);
+    
+    // Survive at 1 HP
+    const newPlayerWounds = (selectedChar.wounds || 10) - 1;
+    setPlayerWounds(newPlayerWounds);
+    setIsDead(false);
+    
+    // Update character with reduced fate
+    const updated = { ...selectedChar, fate: newFate };
+    updateCharacter(selectedCharIdx, updated);
+    
+    // Add to combat log
+    setCombatLog(prevLog => [...prevLog, { type: "system", text: "FATE POINT SPENT! You survive at 1 HP!" }]);
   }
 
   function updateCharacter(index, updatedChar) {
