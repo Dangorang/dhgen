@@ -1,5 +1,6 @@
 import { useState } from "react";
 import { MISSIONS, INJURY_TABLE, getRank } from "./missionData";
+import { generateEncounter, getEnvironmentFromMission } from "./enemyData";
 
 const TIER_COLOR = {
   Routine:   "#6a8060",
@@ -33,6 +34,12 @@ export default function MissionSystem({ onNavigate }) {
   const [xpGained, setXpGained]         = useState(0);
   const [fatePrompt, setFatePrompt]     = useState(false);
   const [isDead, setIsDead]             = useState(false);
+  const [encounter, setEncounter]       = useState(null);
+  const [combatPhase, setCombatPhase]    = useState(null);
+  const [combatLog, setCombatLog]       = useState([]);
+  const [playerWounds, setPlayerWounds]  = useState(0);
+  const [enemyWounds, setEnemyWounds]   = useState([]);
+  const [currentEnemy, setCurrentEnemy] = useState(0);
 
   // ── PHASE: SELECT CHARACTER ──────────────────────────────────
   if (phase === "select_character") {
@@ -75,7 +82,7 @@ export default function MissionSystem({ onNavigate }) {
   // ── PHASE: SELECT MISSION ────────────────────────────────────
   if (phase === "select_mission") {
     return (
-      <Screen onNavigate={onNavigate} title="Select Mission" subtitle={`Deploying: ${selectedChar.name}`} onBack={() => setPhase("select_character")}>
+      <Screen onNavigate={onNavigate} title="Select Mission" subtitle={`Deploying: ${selectedChar.name}`} onBack={() => { setPhase("select_character"); setEncounter(null); }}>
         {["Routine", "Dangerous", "Deadly"].map(tier => (
           <div key={tier} style={{ marginBottom: 24 }}>
             <div style={{ fontSize: 10, letterSpacing: 3, color: TIER_COLOR[tier], textTransform: "uppercase", marginBottom: 10, fontFamily: "Cinzel", borderBottom: "1px solid #2a1808", paddingBottom: 6 }}>
@@ -109,8 +116,18 @@ export default function MissionSystem({ onNavigate }) {
 
   // ── PHASE: BRIEFING ──────────────────────────────────────────
   if (phase === "briefing") {
+    const environment = getEnvironmentFromMission(selectedMission);
+    const rank = getRank(selectedChar.xp || 0);
+    const missionWithRank = { ...selectedMission, rank };
+    
+    if (!encounter) {
+      const generatedEncounter = generateEncounter(missionWithRank, environment, rank);
+      setEncounter(generatedEncounter);
+      setEnemyWounds(generatedEncounter.enemies.map(e => e.wounds));
+    }
+    
     return (
-      <Screen onNavigate={onNavigate} title={selectedMission.name} subtitle={`${selectedMission.type} · ${selectedMission.tier}`} onBack={() => setPhase("select_mission")}>
+      <Screen onNavigate={onNavigate} title={selectedMission.name} subtitle={`${selectedMission.type} · ${selectedMission.tier}`} onBack={() => { setPhase("select_mission"); setEncounter(null); }}>
         <div style={{ border: "1px solid #3a2510", background: "rgba(15,10,4,0.85)", padding: "16px 20px", marginBottom: 16 }}>
           <div style={{ fontFamily: "'IM Fell English', serif", fontStyle: "italic", fontSize: 14, color: "#b8a070", lineHeight: 1.6, marginBottom: 16 }}>
             {selectedMission.flavor}
@@ -127,8 +144,35 @@ export default function MissionSystem({ onNavigate }) {
             <span>Failure: <span style={{ color: "#a05030" }}>{selectedMission.xpFailure} XP</span></span>
           </div>
         </div>
+        
+        {/* ENCOUNTER PREVIEW */}
+        {encounter && (
+          <div style={{ border: "1px solid #5a2020", background: "rgba(40,15,15,0.6)", padding: "16px 20px", marginBottom: 16 }}>
+            <div style={{ fontSize: 9, letterSpacing: 2, color: "#c05050", textTransform: "uppercase", marginBottom: 10 }}>⚠ Hostiles Detected</div>
+            <div style={{ fontFamily: "'Cinzel', serif", fontSize: 10, color: "#8a5040", marginBottom: 12, letterSpacing: 1 }}>Environment: {environment}</div>
+            {encounter.enemies.map((enemy, i) => (
+              <div key={i} style={{ padding: "10px 12px", background: "rgba(30,10,10,0.5)", marginBottom: 8, borderLeft: "2px solid #c05050" }}>
+                <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+                  <span style={{ fontFamily: "'Cinzel', serif", fontSize: 13, color: "#d4a050" }}>{enemy.name}</span>
+                  <span style={{ fontSize: 10, color: "#a05050" }}>{enemy.wounds} Wounds</span>
+                </div>
+                <div style={{ fontFamily: "'IM Fell English', serif", fontSize: 11, color: "#7a5040", marginTop: 4, fontStyle: "italic" }}>
+                  {enemy.description}
+                </div>
+                <div style={{ fontFamily: "'IM Fell English', serif", fontSize: 10, color: "#6a4030", marginTop: 6 }}>
+                  WS {enemy.stats.WS} | BS {enemy.stats.BS} | S {enemy.stats.S} | T {enemy.stats.T} | Armor {enemy.armor}
+                </div>
+              </div>
+            ))}
+            <div style={{ display: "flex", justifyContent: "space-between", marginTop: 12, paddingTop: 10, borderTop: "1px solid #3a1515", fontSize: 11, fontFamily: "Cinzel" }}>
+              <span style={{ color: "#a05050" }}>Total Wounds: {encounter.totalWounds}</span>
+              <span style={{ color: "#c09040" }}>XP Value: {encounter.totalXP}</span>
+            </div>
+          </div>
+        )}
+        
         <div style={{ textAlign: "center" }}>
-          <button onClick={() => runMission()} style={{ padding: "12px 32px", fontSize: 13, letterSpacing: 3, borderColor: TIER_COLOR[selectedMission.tier], color: TIER_COLOR[selectedMission.tier] }}>
+          <button onClick={() => startCombat()} style={{ padding: "12px 32px", fontSize: 13, letterSpacing: 3, borderColor: TIER_COLOR[selectedMission.tier], color: TIER_COLOR[selectedMission.tier] }}>
             ✦ Deploy {selectedChar.name}
           </button>
         </div>
@@ -156,6 +200,22 @@ export default function MissionSystem({ onNavigate }) {
             </div>
           )}
         </div>
+
+        {/* ENCOUNTER SUMMARY */}
+        {encounter && (
+          <div style={{ border: "1px solid #5a2020", background: "rgba(40,15,15,0.6)", padding: "16px 20px", marginBottom: 16 }}>
+            <div style={{ fontSize: 9, letterSpacing: 2, color: "#c05050", textTransform: "uppercase", marginBottom: 10 }}>— HOSTILES ENGAGED —</div>
+            {encounter.enemies.map((enemy, i) => (
+              <div key={i} style={{ padding: "8px 12px", background: "rgba(30,10,10,0.5)", marginBottom: 6, display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+                <span style={{ fontFamily: "'Cinzel', serif", fontSize: 12, color: "#d4a050" }}>{enemy.name}</span>
+                <span style={{ fontSize: 10, color: "#a05050" }}>Defeated · {enemy.xpValue} XP</span>
+              </div>
+            ))}
+            <div style={{ marginTop: 10, paddingTop: 8, borderTop: "1px solid #3a1515", fontSize: 11, fontFamily: "Cinzel", color: "#c09040", textAlign: "center" }}>
+              Total Enemy XP: {encounter.totalXP}
+            </div>
+          </div>
+        )}
 
         {/* FATE PROMPT */}
         {fatePrompt && !isDead && (
@@ -218,8 +278,8 @@ export default function MissionSystem({ onNavigate }) {
         {/* ACTIONS */}
         {!fatePrompt && (
           <div style={{ display: "flex", gap: 12, flexWrap: "wrap" }}>
-            <button onClick={() => setPhase("select_mission")}>Deploy Again</button>
-            <button onClick={() => { setPhase("select_character"); setResults([]); setInjuries([]); setDeathCheck(null); setMissionOutcome(null); setFatePrompt(false); setIsDead(false); }}>
+            <button onClick={() => { setPhase("select_mission"); resetMissionState(); }}>Deploy Again</button>
+            <button onClick={() => { setPhase("select_character"); resetMissionState(); setResults([]); setInjuries([]); setDeathCheck(null); setMissionOutcome(null); setFatePrompt(false); setIsDead(false); }}>
               Change Acolyte
             </button>
             <button onClick={() => onNavigate("home")}>Return to Base</button>
@@ -227,6 +287,225 @@ export default function MissionSystem({ onNavigate }) {
         )}
       </Screen>
     );
+  }
+
+  // ── COMBAT PHASE ─────────────────────────────────────────────
+  if (phase === "combat") {
+    const currentEnemyData = encounter?.enemies[currentEnemy];
+    const isDead = playerWounds >= (selectedChar.wounds || 10);
+    const allEnemiesDead = enemyWounds.every(w => w <= 0);
+    
+    return (
+      <Screen onNavigate={onNavigate} title="Combat Encounter" subtitle={currentEnemyData?.name || "Battle"} onBack={() => { setPhase("briefing"); setCombatLog([]); setPlayerWounds(0); setEnemyWounds(encounter?.enemies.map(e => e.wounds) || []); }}>
+        {/* Combat Status */}
+        <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 16, marginBottom: 16 }}>
+          {/* Player Status */}
+          <div style={{ border: "1px solid #3a6a3a", background: "rgba(20,40,20,0.6)", padding: 12 }}>
+            <div style={{ fontFamily: "'Cinzel Decorative', serif", fontSize: 12, color: "#6ee7b7", marginBottom: 8 }}>{selectedChar.name}</div>
+            <div style={{ display: "flex", justifyContent: "space-between", fontSize: 11, color: "#8a9a8a", marginBottom: 4 }}>
+              <span>Wounds</span>
+              <span style={{ color: playerWounds > (selectedChar.wounds || 10) * 0.5 ? "#f87171" : "#6ee7b7" }}>
+                {(selectedChar.wounds || 10) - playerWounds} / {selectedChar.wounds || 10}
+              </span>
+            </div>
+            <div style={{ background: "#1a1a1a", height: 8, borderRadius: 4 }}>
+              <div style={{ 
+                background: playerWounds > (selectedChar.wounds || 10) * 0.5 ? "#6ee7b7" : "#f87171", 
+                height: "100%", 
+                width: `${Math.max(0, ((selectedChar.wounds || 10) - playerWounds) / (selectedChar.wounds || 10) * 100)}%`,
+                borderRadius: 4,
+                transition: "width 0.3s"
+              }} />
+            </div>
+          </div>
+          
+          {/* Enemy Status */}
+          <div style={{ border: "1px solid #6a3a3a", background: "rgba(40,20,20,0.6)", padding: 12 }}>
+            <div style={{ fontFamily: "'Cinzel Decorative', serif", fontSize: 12, color: "#f87171", marginBottom: 8 }}>{currentEnemyData?.name || "Enemy"}</div>
+            <div style={{ display: "flex", justifyContent: "space-between", fontSize: 11, color: "#9a8a8a", marginBottom: 4 }}>
+              <span>Wounds</span>
+              <span style={{ color: enemyWounds[currentEnemy] > (currentEnemyData?.wounds || 10) * 0.5 ? "#f87171" : "#f87171" }}>
+                {Math.max(0, enemyWounds[currentEnemy])} / {currentEnemyData?.wounds || 10}
+              </span>
+            </div>
+            <div style={{ background: "#1a1a1a", height: 8, borderRadius: 4 }}>
+              <div style={{ 
+                background: "#f87171", 
+                height: "100%", 
+                width: `${Math.max(0, (enemyWounds[currentEnemy] / (currentEnemyData?.wounds || 10)) * 100)}%`,
+                borderRadius: 4,
+                transition: "width 0.3s"
+              }} />
+            </div>
+          </div>
+        </div>
+        
+        {/* Combat Log */}
+        <div style={{ border: "1px solid #3a2510", background: "rgba(15,10,4,0.85)", marginBottom: 16, maxHeight: 200, overflowY: "auto" }}>
+          <div style={{ background: "linear-gradient(90deg,#2a1808,#1a1005,#2a1808)", borderBottom: "1px solid #3a2510", padding: "8px 16px", fontFamily: "'Cinzel Decorative', serif", fontSize: 10, color: "#a07030", letterSpacing: 3 }}>
+            — COMBAT LOG —
+          </div>
+          {combatLog.length === 0 ? (
+            <div style={{ padding: 16, textAlign: "center", fontFamily: "'IM Fell English', serif", fontSize: 12, color: "#6a5030", fontStyle: "italic" }}>
+              Combat begins! Choose your action.
+            </div>
+          ) : (
+            combatLog.map((log, i) => (
+              <div key={i} style={{ padding: "8px 16px", borderBottom: "1px solid #1a1005", fontFamily: "'IM Fell English', serif", fontSize: 12, color: log.type === "player" ? "#6ee7b7" : log.type === "enemy" ? "#f87171" : "#a89070" }}>
+                {log.text}
+              </div>
+            ))
+          )}
+        </div>
+        
+        {/* Combat Actions */}
+        {!isDead && !allEnemiesDead && (
+          <div style={{ display: "flex", gap: 12, flexWrap: "wrap" }}>
+            <button onClick={() => playerAttack()} style={{ borderColor: "#6a8060", color: "#80c080", padding: "10px 20px" }}>
+              ⚔ Attack
+            </button>
+            <button onClick={() => tryEscape()} style={{ borderColor: "#a07030", color: "#c09040", padding: "10px 20px" }}>
+              🏃 Escape (Ag)
+            </button>
+          </div>
+        )}
+        
+        {/* Combat End States */}
+        {isDead && (
+          <div style={{ border: "1px solid #7a1a1a", background: "rgba(60,10,10,0.8)", padding: 20, textAlign: "center" }}>
+            <div style={{ fontFamily: "'Cinzel Decorative', serif", fontSize: 18, color: "#f87171", letterSpacing: 4, marginBottom: 8 }}>YOU HAVE FALLEN</div>
+            <div style={{ fontFamily: "'IM Fell English', serif", fontSize: 13, color: "#b87070", marginBottom: 16 }}>
+              {selectedChar.name} has been slain in combat.
+            </div>
+            <button onClick={() => { setPhase("select_character"); resetMissionState(); }}>Return to Base</button>
+          </div>
+        )}
+        
+        {allEnemiesDead && (
+          <div style={{ border: "1px solid #3a6a3a", background: "rgba(20,40,20,0.8)", padding: 20, textAlign: "center" }}>
+            <div style={{ fontFamily: "'Cinzel Decorative', serif", fontSize: 18, color: "#6ee7b7", letterSpacing: 4, marginBottom: 8 }}>VICTORY</div>
+            <div style={{ fontFamily: "'IM Fell English', serif", fontSize: 13, color: "#80b080", marginBottom: 16 }}>
+              All enemies defeated! Preparing mission completion...
+            </div>
+            <button onClick={() => completeMission(true)} style={{ borderColor: "#6a8060", color: "#80c080" }}>
+              Continue Mission
+            </button>
+          </div>
+        )}
+      </Screen>
+    );
+  }
+
+  // ── COMBAT FUNCTIONS ───────────────────────────────────────────
+  function startCombat() {
+    setCombatLog([{ type: "system", text: `Combat begins with ${encounter.enemies.length} enemy/enemies!` }]);
+    setPlayerWounds(0);
+    setEnemyWounds(encounter.enemies.map(e => e.wounds));
+    setCurrentEnemy(0);
+    setPhase("combat");
+  }
+
+  function playerAttack() {
+    const char = selectedChar;
+    const enemy = encounter.enemies[currentEnemy];
+    const ws = char.stats.WS || 20;
+    const roll = d100();
+    const hit = roll <= ws;
+    
+    let log = [{ type: "player", text: `You attack with WS ${ws}... rolled ${roll}. ${hit ? "HIT!" : "MISS!"}` }];
+    
+    if (hit) {
+      const dmg = d6() + 3;
+      const newEnemyWounds = [...enemyWounds];
+      newEnemyWounds[currentEnemy] = Math.max(0, newEnemyWounds[currentEnemy] - dmg);
+      setEnemyWounds(newEnemyWounds);
+      log.push({ type: "player", text: `Your attack deals ${dmg} damage! Enemy has ${Math.max(0, newEnemyWounds[currentEnemy])} wounds left.` });
+      
+      if (newEnemyWounds[currentEnemy] <= 0) {
+        log.push({ type: "player", text: `The ${enemy.name} falls!` });
+        const nextEnemy = currentEnemy + 1;
+        if (nextEnemy < encounter.enemies.length) {
+          setCurrentEnemy(nextEnemy);
+          log.push({ type: "system", text: `Next enemy approaches: ${encounter.enemies[nextEnemy].name}!` });
+        }
+      }
+    }
+    
+    setCombatLog([...combatLog, ...log]);
+    
+    if (enemyWounds[currentEnemy] > 0 || currentEnemy < encounter.enemies.length - 1) {
+      setTimeout(() => enemyTurn(), 500);
+    }
+  }
+
+  function tryEscape() {
+    const char = selectedChar;
+    const ag = char.stats.Ag || 20;
+    const difficulty = 30;
+    const roll = d100();
+    const success = roll <= ag;
+    
+    if (success) {
+      setCombatLog([...combatLog, { type: "player", text: `You attempt to escape (Ag ${ag})... rolled ${roll}. SUCCESS! You flee the combat.` }]);
+      setTimeout(() => completeMission(false), 1000);
+    } else {
+      setCombatLog([...combatLog, { type: "player", text: `You attempt to escape (Ag ${ag})... rolled ${roll}. FAILED!` }]);
+      setTimeout(() => enemyTurn(), 500);
+    }
+  }
+
+  function enemyTurn() {
+    const char = selectedChar;
+    const enemy = encounter.enemies[currentEnemy];
+    const ews = enemy.stats.WS || 20;
+    const roll = d100();
+    const hit = roll <= ews;
+    
+    let log = [{ type: "enemy", text: `${enemy.name} attacks with WS ${ews}... rolled ${roll}. ${hit ? "HIT!" : "MISS!"}` }];
+    
+    if (hit) {
+      const dmg = d6() + Math.floor((enemy.stats.S || 20) / 10);
+      const newPlayerWounds = playerWounds + dmg;
+      setPlayerWounds(newPlayerWounds);
+      log.push({ type: "enemy", text: `The enemy deals ${dmg} damage! You have ${(char.wounds || 10) - newPlayerWounds} wounds left.` });
+    }
+    
+    setCombatLog([...combatLog, ...log]);
+  }
+
+  function completeMission(victory) {
+    const char = selectedChar;
+    const mission = selectedMission;
+    const injuriesList = [];
+    
+    const totalXP = victory ? encounter.totalXP + mission.xpSuccess : mission.xpFailure;
+    
+    setResults([{ label: "Combat", flavor: victory ? "All enemies defeated" : "Escaped from combat", stat: "WS", statValue: char.stats.WS || 20, difficulty: 0, roll: 0, passed: victory, margin: 0, extreme: false, isCombat: true }]);
+    setInjuries([]);
+    setXpGained(totalXP);
+    
+    let updatedStats = { ...char.stats };
+    
+    const newXP = (char.xp || 0) + totalXP;
+    updateCharacter(selectedCharIdx, {
+      ...char,
+      stats: updatedStats,
+      wounds: Math.max(1, (char.wounds || 10) - playerWounds),
+      xp: newXP,
+      injuries: [...(char.injuries || []), ...injuriesList.map(i => i.name)],
+    });
+
+    setPhase("results");
+  }
+
+  function resetMissionState() {
+    setEncounter(null);
+    setCombatLog([]);
+    setPlayerWounds(0);
+    setEnemyWounds([]);
+    setCurrentEnemy(0);
+    setResults([]);
+    setInjuries([]);
   }
 
   // ── MISSION RESOLUTION LOGIC ─────────────────────────────────
@@ -245,13 +524,11 @@ export default function MissionSystem({ onNavigate }) {
       let injury = null;
 
       if (!result.passed && result.extreme && check.isCombat) {
-        // Wound damage
         const dmgMin = mission.woundDamageRange[0];
         const dmgMax = mission.woundDamageRange[1];
         const dmg    = dmgMin + Math.floor(Math.random() * (dmgMax - dmgMin + 1));
         currentWounds -= dmg;
 
-        // Injury check — below 25% max wounds
         if (currentWounds < char.wounds * 0.25) {
           injury = INJURY_TABLE[Math.floor(Math.random() * INJURY_TABLE.length)];
           injuriesList.push(injury);
@@ -279,7 +556,6 @@ export default function MissionSystem({ onNavigate }) {
     const fails   = checkResults.filter(r => !r.passed).length;
     const success = passes > fails;
 
-    // Degree of success bonus
     const totalMargin = checkResults.filter(r => r.passed).reduce((sum, r) => sum + r.margin, 0);
     const bonusXP     = Math.floor(totalMargin / 10) * 10;
     const baseXP      = success ? mission.xpSuccess : mission.xpFailure;
@@ -289,7 +565,6 @@ export default function MissionSystem({ onNavigate }) {
     setInjuries(injuriesList);
     setXpGained(totalXP);
 
-    // Apply injuries to saved character
     let updatedStats = { ...char.stats };
     for (const inj of injuriesList) {
       if (updatedStats[inj.stat] !== undefined) {
@@ -297,7 +572,6 @@ export default function MissionSystem({ onNavigate }) {
       }
     }
 
-    // Death check — 3+ extreme fails
     if (extremeFails >= 3) {
       const toughness  = char.stats.T || 20;
       const deathRoll  = d100();
@@ -306,7 +580,6 @@ export default function MissionSystem({ onNavigate }) {
       if (!survived) {
         setFatePrompt(true);
         setDeathCheck({ deathRoll, toughness });
-        // Save with injuries but don't award XP yet — wait for fate resolution
         updateCharacter(selectedCharIdx, {
           ...char,
           stats:    updatedStats,
@@ -318,7 +591,6 @@ export default function MissionSystem({ onNavigate }) {
       }
     }
 
-    // Survived — save and award XP
     const newXP   = (char.xp || 0) + totalXP;
     updateCharacter(selectedCharIdx, {
       ...char,

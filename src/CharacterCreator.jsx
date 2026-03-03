@@ -544,9 +544,70 @@ export default function CharacterCreator({onNavigate}) {
       }));
     }
   }
+const STARTING_INVENTORY = {
+  Adept: [
+    { id: "stub_revolver", name: "Stub Revolver", type: "Pistol", quantity: 1, equipped: true },
+    { id: "robes", name: "Administratum Robes", type: "Armor", quantity: 1, equipped: true },
+  ],
+  Arbitrator: [
+    { id: "shotgun", name: "Shotgun", type: "Basic", quantity: 1, equipped: true },
+    { id: "club", name: "Club", type: "Melee", quantity: 1, equipped: false },
+    { id: "brass_knuckles", name: "Brass Knuckles", type: "Melee", quantity: 1, equipped: false },
+    { id: "knife", name: "Knife", type: "Melee", quantity: 1, equipped: false },
+    { id: "chain_coat", name: "Chain Coat", type: "Armor", quantity: 1, equipped: true },
+  ],
+  Assassin: [
+    { id: "shotgun", name: "Shotgun", type: "Basic", quantity: 1, equipped: false },
+    { id: "sword", name: "Sword", type: "Melee", quantity: 1, equipped: true },
+    { id: "knife", name: "Knife", type: "Melee", quantity: 1, equipped: false },
+    { id: "laspistol", name: "Laspistol", type: "Pistol", quantity: 1, equipped: true },
+  ],
+  Cleric: [
+    { id: "hammer", name: "Hammer", type: "Melee", quantity: 1, equipped: true },
+    { id: "stub_revolver", name: "Stub Revolver", type: "Pistol", quantity: 1, equipped: false },
+    { id: "chain_coat", name: "Chain Coat", type: "Armor", quantity: 1, equipped: true },
+  ],
+  Guardsman: [
+    { id: "sword", name: "Sword", type: "Melee", quantity: 1, equipped: true },
+    { id: "laspistol", name: "Laspistol", type: "Pistol", quantity: 1, equipped: true },
+    { id: "lasgun", name: "Lasgun", type: "Basic", quantity: 1, equipped: false },
+    { id: "knife", name: "Knife", type: "Melee", quantity: 1, equipped: false },
+    { id: "flak_armour", name: "Flak Armour", type: "Armor", quantity: 1, equipped: true },
+  ],
+  "Imperial Psyker": [
+    { id: "sword", name: "Sword", type: "Melee", quantity: 1, equipped: true },
+    { id: "staff", name: "Staff", type: "Melee", quantity: 1, equipped: false },
+    { id: "stub_revolver", name: "Stub Revolver", type: "Pistol", quantity: 1, equipped: false },
+    { id: "quilted_vest", name: "Quilted Vest", type: "Armor", quantity: 1, equipped: true },
+  ],
+  Scum: [
+    { id: "autogun", name: "Autogun", type: "Basic", quantity: 1, equipped: true },
+    { id: "autopistol", name: "Autopistol", type: "Pistol", quantity: 1, equipped: false },
+    { id: "brass_knuckles", name: "Brass Knuckles", type: "Melee", quantity: 1, equipped: false },
+    { id: "knife", name: "Knife", type: "Melee", quantity: 1, equipped: false },
+    { id: "quilted_vest", name: "Quilted Vest", type: "Armor", quantity: 1, equipped: true },
+  ],
+  "Tech-Priest": [
+    { id: "metal_staff", name: "Metal Staff", type: "Melee", quantity: 1, equipped: true },
+    { id: "laspistol", name: "Laspistol", type: "Pistol", quantity: 1, equipped: true },
+    { id: "lascarbine", name: "Las Carbine", type: "Basic", quantity: 1, equipped: false },
+    { id: "knife", name: "Knife", type: "Melee", quantity: 1, equipped: false },
+    { id: "flak_vest", name: "Flak Vest", type: "Armor", quantity: 1, equipped: true },
+  ],
+  "Schola Progenium Sororitas": [
+    { id: "club", name: "Club", type: "Melee", quantity: 1, equipped: true },
+    { id: "laspistol", name: "Laspistol", type: "Pistol", quantity: 1, equipped: true },
+    { id: "carapace_armor", name: "Carapace Chest Plate", type: "Armor", quantity: 1, equipped: true },
+  ],
+};
+
 function saveCharacter(){
 	if (!char.statsRolled) return;
 	const roster = JSON.parse(localStorage.getItem("dhgen_roster") || "[]");
+
+  const careerInventory = STARTING_INVENTORY[char.career] || [
+    { id: "knife", name: "Knife", type: "Melee", quantity: 1, equipped: false },
+  ];
 
   const entry = {
     name: char.name,
@@ -571,6 +632,7 @@ function saveCharacter(){
       WP: stats.WP?.total || 0,
       Fel: stats.Fel?.total || 0,
     },
+    inventory: careerInventory,
     savedAt: new Date().toLocaleDateString(),
   };
 
