@@ -599,20 +599,28 @@ export default function MissionSystem({ onNavigate }) {
               };
               
               if (partyIdx !== -1) {
-                const isActive = partyIdx === currentPartyMember;
+                // Check if this party member is active in initiative
+                const initEntry = initiativeOrder.find(e => e.type === 'party' && e.index === partyIdx);
+                const isActive = initEntry && initiativeOrder.indexOf(initEntry) === currentTurn;
+                const wounds = partyWounds[partyIdx] || 0;
+                const maxWounds = party[partyIdx]?.wounds || 10;
+                const isDead = wounds >= maxWounds;
                 const initNum = getPartyInitNumber(partyIdx);
-                cellColor = isActive ? "#2a5a2a" : "#1a3a1a";
-                cellBorder = isActive ? "#4a8a4a" : "#2a4a2a";
+                cellColor = isActive ? "#2a5a2a" : isDead ? "#1a1a1a" : "#1a3a1a";
+                cellBorder = isActive ? "#4a8a4a" : isDead ? "#3a2020" : "#2a4a2a";
                 cellContent = (
-                  <span style={{ color: isActive ? "#8afa8a" : "#5aba5a", fontSize: 8, fontWeight: "bold" }}>
+                  <span style={{ color: isDead ? "#ff4040" : (isActive ? "#8afa8a" : "#5aba5a"), fontSize: 8, fontWeight: "bold" }}>
                     {initNum}
                   </span>
                 );
               } else if (enemyIdx !== -1) {
-                const isTarget = enemyIdx === currentEnemy;
+                // Check if this enemy is active in initiative
+                const initEntry = initiativeOrder.find(e => e.type === 'enemy' && e.index === enemyIdx);
+                const isActive = initEntry && initiativeOrder.indexOf(initEntry) === currentTurn;
+                const isDead = (enemyWounds[enemyIdx] || 0) <= 0;
                 const initNum = getEnemyInitNumber(enemyIdx);
-                cellColor = isTarget ? "#5a2a2a" : "#3a1a1a";
-                cellBorder = isTarget ? "#8a4a4a" : "#4a2a2a";
+                cellColor = isActive ? "#5a2a2a" : isDead ? "#1a0a0a" : "#3a1a1a";
+                cellBorder = isActive ? "#8a4a4a" : isDead ? "#2a1515" : "#4a2a2a";
                 cellContent = <span style={{ color: "#fa5a5a", fontSize: 8, fontWeight: "bold" }}>{initNum}</span>;
               }
               
@@ -637,8 +645,15 @@ export default function MissionSystem({ onNavigate }) {
             })}
           </div>
           <div style={{ display: "flex", gap: 16, marginTop: 8, fontSize: 10, color: "#6a5030" }}>
-            <span><span style={{ color: "#5aba5a" }}>■</span> Party ({initiativeOrder.filter(e => e.type === 'party').map((e, i) => i + 1).join(", ")})</span>
-            <span><span style={{ color: "#fa5a5a" }}>■</span> Enemies ({initiativeOrder.filter(e => e.type === 'enemy').map((e, i) => i + 1).join(", ")})</span>
+            <span><span style={{ color: "#5aba5a" }}>■</span> Party ({initiativeOrder.filter(e => e.type === 'party').map((e, i) => {
+              const wounds = partyWounds[e.index] || 0;
+              const isDead = wounds >= (party[e.index]?.wounds || 10);
+              return isDead ? `${i + 1}*` : i + 1;
+            }).join(", ")})</span>
+            <span><span style={{ color: "#fa5a5a" }}>■</span> Enemies ({initiativeOrder.filter(e => e.type === 'enemy').map((e, i) => {
+              const isDead = (enemyWounds[e.index] || 0) <= 0;
+              return isDead ? `${i + 1}*` : i + 1;
+            }).join(", ")})</span>
           </div>
         </div>
         
