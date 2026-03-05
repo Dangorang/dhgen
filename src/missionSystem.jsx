@@ -71,6 +71,9 @@ export default function MissionSystem({ onNavigate }) {
   // Combat sub-phase: 'movement' or 'attack'
   const [combatAction, setCombatAction] = useState('movement');
   
+  // Party member needing fate resolution
+  const [pendingFateIndex, setPendingFateIndex] = useState(null);
+  
   // Initiative system
   const [initiativeOrder, setInitiativeOrder] = useState([]); // Array of {type: 'party'|'enemy', index: number, initiative: number}
   const [currentTurn, setCurrentTurn] = useState(0); // Index in initiativeOrder
@@ -529,46 +532,23 @@ export default function MissionSystem({ onNavigate }) {
           </div>
         </div>
         
-        {/* Combat Status */}
-        <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 16, marginBottom: 16 }}>
-          {/* Active Party Member Status */}
-          <div style={{ border: "1px solid #3a6a3a", background: "rgba(20,40,20,0.6)", padding: 12 }}>
-            <div style={{ fontFamily: "'Cinzel Decorative', serif", fontSize: 12, color: "#6ee7b7", marginBottom: 8 }}>{activeChar.name} (Acting)</div>
-            <div style={{ display: "flex", justifyContent: "space-between", fontSize: 11, color: "#8a9a8a", marginBottom: 4 }}>
-              <span>Wounds</span>
-              <span style={{ color: activeCharWounds > (activeChar.wounds || 10) * 0.5 ? "#f87171" : "#6ee7b7" }}>
-                {(activeChar.wounds || 10) - activeCharWounds} / {activeChar.wounds || 10}
-              </span>
-            </div>
-            <div style={{ background: "#1a1a1a", height: 8, borderRadius: 4 }}>
-              <div style={{ 
-                background: activeCharWounds > (activeChar.wounds || 10) * 0.5 ? "#6ee7b7" : "#f87171", 
-                height: "100%", 
-                width: `${Math.max(0, ((activeChar.wounds || 10) - activeCharWounds) / (activeChar.wounds || 10) * 100)}%`,
-                borderRadius: 4,
-                transition: "width 0.3s"
-              }} />
-            </div>
+        {/* Enemy Status (current target) */}
+        <div style={{ border: "1px solid #6a3a3a", background: "rgba(40,20,20,0.6)", padding: 12, marginBottom: 16 }}>
+          <div style={{ fontFamily: "'Cinzel Decorative', serif", fontSize: 12, color: "#f87171", marginBottom: 8 }}>{currentEnemyData?.name || "Enemy"}</div>
+          <div style={{ display: "flex", justifyContent: "space-between", fontSize: 11, color: "#9a8a8a", marginBottom: 4 }}>
+            <span>Wounds</span>
+            <span style={{ color: enemyWounds[currentEnemy] > (currentEnemyData?.wounds || 10) * 0.5 ? "#f87171" : "#f87171" }}>
+              {Math.max(0, enemyWounds[currentEnemy])} / {currentEnemyData?.wounds || 10}
+            </span>
           </div>
-          
-          {/* Enemy Status */}
-          <div style={{ border: "1px solid #6a3a3a", background: "rgba(40,20,20,0.6)", padding: 12 }}>
-            <div style={{ fontFamily: "'Cinzel Decorative', serif", fontSize: 12, color: "#f87171", marginBottom: 8 }}>{currentEnemyData?.name || "Enemy"}</div>
-            <div style={{ display: "flex", justifyContent: "space-between", fontSize: 11, color: "#9a8a8a", marginBottom: 4 }}>
-              <span>Wounds</span>
-              <span style={{ color: enemyWounds[currentEnemy] > (currentEnemyData?.wounds || 10) * 0.5 ? "#f87171" : "#f87171" }}>
-                {Math.max(0, enemyWounds[currentEnemy])} / {currentEnemyData?.wounds || 10}
-              </span>
-            </div>
-            <div style={{ background: "#1a1a1a", height: 8, borderRadius: 4 }}>
-              <div style={{ 
-                background: "#f87171", 
-                height: "100%", 
-                width: `${Math.max(0, (enemyWounds[currentEnemy] / (currentEnemyData?.wounds || 10)) * 100)}%`,
-                borderRadius: 4,
-                transition: "width 0.3s"
-              }} />
-            </div>
+          <div style={{ background: "#1a1a1a", height: 8, borderRadius: 4 }}>
+            <div style={{ 
+              background: "#f87171", 
+              height: "100%", 
+              width: `${Math.max(0, (enemyWounds[currentEnemy] / (currentEnemyData?.wounds || 10)) * 100)}%`,
+              borderRadius: 4,
+              transition: "width 0.3s"
+            }} />
           </div>
         </div>
         
@@ -707,8 +687,8 @@ export default function MissionSystem({ onNavigate }) {
           )}
         </div>
         
-        {/* Combat Actions */}
-        {!isDead && !allEnemiesDead && isPlayerTurn && (
+        {/* Combat Actions - only show when no pending fate */}
+        {pendingFateIndex === null && !allEnemiesDead && isPlayerTurn && (
           <div style={{ border: "1px solid #3a2510", background: "rgba(15,10,4,0.85)", padding: "12px 16px", marginBottom: 16 }}>
             {combatAction === 'movement' && (
               <>
@@ -772,32 +752,28 @@ export default function MissionSystem({ onNavigate }) {
           </div>
         )}
         
-        {/* Combat End States */}
-        {isDead && (
+        {/* Combat End States - Fate Resolution */}
+        {pendingFateIndex !== null && (
           <div style={{ border: "1px solid #7a1a1a", background: "rgba(60,10,10,0.8)", padding: 20, textAlign: "center" }}>
-            <div style={{ fontFamily: "'Cinzel Decorative', serif", fontSize: 18, color: "#f87171", letterSpacing: 4, marginBottom: 8 }}>{activeChar.name} HAS FALLEN</div>
+            <div style={{ fontFamily: "'Cinzel Decorative', serif", fontSize: 18, color: "#f87171", letterSpacing: 4, marginBottom: 8 }}>{party[pendingFateIndex]?.name} HAS FALLEN</div>
             <div style={{ fontFamily: "'IM Fell English', serif", fontSize: 13, color: "#b87070", marginBottom: 16 }}>
-              {activeChar.name} has been slain in combat.
+              {party[pendingFateIndex]?.name} has been slain in combat.
             </div>
-            {(!fateSpentInMission || !fateSpentInMission[currentPartyMember]) && (activeChar.fate || 0) > 0 ? (
-              <div>
-                <div style={{ fontFamily: "'IM Fell English', serif", fontSize: 12, color: "#c09040", marginBottom: 12 }}>
-                  The Emperor provides... Spend a Fate Point to survive at 1 HP?
-                </div>
-                <div style={{ display: "flex", gap: 12, justifyContent: "center" }}>
-                  <button onClick={() => spendFateToSurvive()} style={{ borderColor: "#6a8060", color: "#80c080", padding: "10px 20px" }}>
-                    ✦ Spend Fate ({activeChar.fate} remaining)
-                  </button>
-                  <button onClick={() => confirmPartyMemberDeath()} style={{ borderColor: "#7a3a1b", color: "#c07050", padding: "10px 20px" }}>
+            <div>
+              <div style={{ fontFamily: "'IM Fell English', serif", fontSize: 12, color: "#c09040", marginBottom: 12 }}>
+                The Emperor provides... Spend a Fate Point to survive at 1 HP?
+              </div>
+              <div style={{ display: "flex", gap: 12, justifyContent: "center" }}>
+                <button onClick={() => spendFateToSurvive(pendingFateIndex)} style={{ borderColor: "#6a8060", color: "#80c080", padding: "10px 20px" }}>
+                  ✦ Spend Fate ({party[pendingFateIndex]?.fate} remaining)
+                </button>
+                  <button onClick={() => confirmPartyMemberDeath(pendingFateIndex)} style={{ borderColor: "#7a3a1b", color: "#c07050", padding: "10px 20px" }}>
                     Accept Death
                   </button>
                 </div>
               </div>
-            ) : (
-              <button onClick={() => handleNextPartyMember()}>Continue with Next Party Member</button>
-            )}
-          </div>
-        )}
+            </div>
+          )}
         
         {allEnemiesDead && (
           <div style={{ border: "1px solid #3a6a3a", background: "rgba(20,40,20,0.8)", padding: 20, textAlign: "center" }}>
@@ -1203,6 +1179,14 @@ export default function MissionSystem({ onNavigate }) {
       return;
     }
     
+    // Check if enemy is already dead
+    const enemyWoundsCurrent = enemyWounds[actor.index] || 0;
+    if (enemyWoundsCurrent <= 0) {
+      console.log("enemyTurn: enemy is dead, skipping turn");
+      setTimeout(() => advanceInitiative(actorIndex, init, partyPos, enemyPosList), 100);
+      return;
+    }
+    
     const enemy = encounter.enemies[actor.index];
     const enemyPos = enemyPosList[actor.index];
     if (!enemyPos) {
@@ -1311,6 +1295,18 @@ export default function MissionSystem({ onNavigate }) {
         
         if (newPartyWounds[nearestIdx] >= (target.wounds || 10)) {
           log.push({ type: "enemy", text: `${target.name} has fallen!` });
+          
+          // Check if this party member has fate available
+          const deadChar = party[nearestIdx];
+          const hasFate = (deadChar.fate || 0) > 0;
+          const fateNotSpent = !fateSpentInMission || !fateSpentInMission[nearestIdx];
+          
+          if (hasFate && fateNotSpent) {
+            // Pause and show fate prompt for THIS character
+            setCombatLog(prevLog => [...prevLog, ...log]);
+            setPendingFateIndex(nearestIdx);
+            return;
+          }
         }
       }
     }
@@ -1515,36 +1511,44 @@ export default function MissionSystem({ onNavigate }) {
     setIsDead(true);
   }
 
-  function spendFateToSurvive() {
-    const char = party[currentPartyMember];
+  function spendFateToSurvive(charIndex) {
+    const char = party[charIndex];
     if ((char.fate || 0) <= 0) return;
     
     const newFate = char.fate - 1;
     
     // Update fate spent tracking
     const newFateSpent = [...(fateSpentInMission || [])];
-    newFateSpent[currentPartyMember] = true;
+    newFateSpent[charIndex] = true;
     setFateSpentInMission(newFateSpent);
     
     // Survive at 1 HP (set wounds to max - 1)
     const newPartyWounds = [...partyWounds];
-    newPartyWounds[currentPartyMember] = (char.wounds || 10) - 1;
+    newPartyWounds[charIndex] = (char.wounds || 10) - 1;
     setPartyWounds(newPartyWounds);
-    setIsDead(false);
+    
+    // Clear pending fate
+    setPendingFateIndex(null);
     
     // Add to combat log
     setCombatLog(prevLog => [...prevLog, { type: "system", text: `FATE POINT SPENT! ${char.name} survives at 1 HP!` }]);
+    
+    // Advance initiative
+    setTimeout(() => advanceInitiative(currentTurn, initiativeOrder, gridPositions.party, gridPositions.enemies), 500);
   }
 
-  function confirmPartyMemberDeath() {
+  function confirmPartyMemberDeath(charIndex) {
     // Mark this party member as dead (their wounds = max)
-    const char = party[currentPartyMember];
+    const char = party[charIndex];
     const newPartyWounds = [...partyWounds];
-    newPartyWounds[currentPartyMember] = char.wounds || 10;
+    newPartyWounds[charIndex] = char.wounds || 10;
     setPartyWounds(newPartyWounds);
     
-    // Move to next living party member or end mission
-    handleNextPartyMember();
+    // Clear pending fate
+    setPendingFateIndex(null);
+    
+    // Advance initiative
+    setTimeout(() => advanceInitiative(currentTurn, initiativeOrder, gridPositions.party, gridPositions.enemies), 500);
   }
 
   function handleNextPartyMember() {
