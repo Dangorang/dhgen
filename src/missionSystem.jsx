@@ -1067,6 +1067,13 @@ export default function MissionSystem({ onNavigate }) {
     setCurrentTurn(nextTurn);
     setCombatAction('movement'); // Reset to movement phase for next actor
     
+    // Check if all enemies are dead
+    const allEnemyDead = enemyWounds.every(w => w <= 0);
+    if (allEnemyDead) {
+      console.log("advanceInitiative: all enemies dead, not scheduling enemy turn");
+      return;
+    }
+    
     // If it's an enemy's turn, schedule their action
     const nextActor = init[nextTurn];
     console.log("advanceInitiative: nextActor =", nextActor);
