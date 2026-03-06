@@ -1,6 +1,8 @@
 import { useState, useRef, useEffect } from "react";
 import { MISSIONS, INJURY_TABLE, getRank } from "./missionData";
 import { generateEncounter, getEnvironmentFromMission } from "./enemyData";
+import PhaserGame from "./phaser/PhaserGame.jsx";
+import { eventBridge } from "./phaser/EventBridge.js";
 
 const TIER_COLOR = {
   Routine:   "#6a8060",
@@ -86,9 +88,20 @@ export default function MissionSystem({ onNavigate }) {
   const currentActor = (initiativeOrder || [])[currentTurn] || null;
   const isPlayerTurn = currentActor?.type === 'party';
   const currentPartyMemberFromInitiative = isPlayerTurn ? currentActor?.index : currentPartyMember;
-  const currentActorIsDead = isPlayerTurn 
+  const currentActorIsDead = isPlayerTurn
     ? (partyWounds[currentActor?.index] || 0) >= (party[currentActor?.index]?.wounds || 10)
     : (enemyWounds[currentActor?.index] || 0) <= 0;
+
+  // Phaser grid state — passed to PhaserGame which forwards to CombatScene
+  const gridState = phase === 'combat' ? {
+    gridPositions,
+    partyWounds,
+    enemyWounds,
+    currentTurn,
+    initiativeOrder,
+    party,
+    enemies: encounter?.enemies || [],
+  } : null;
 
   // ── PHASE: SELECT PARTY ──────────────────────────────────────
   if (phase === "select_character") {
@@ -168,7 +181,7 @@ export default function MissionSystem({ onNavigate }) {
                         {inParty && "✓ "}{char.name}
                       </div>
                       <div style={{ fontFamily: "'IM Fell English', serif", fontSize: 12, color: "#8a7050", marginTop: 3 }}>
-                        {char.gender} · {char.origin} · {char.career}
+                        {char.class || char.career || 'Operative'}
                       </div>
                       <div style={{ marginTop: 6, display: "flex", gap: 8, flexWrap: "wrap" }}>
                         <Badge>{rank}</Badge>
@@ -195,7 +208,7 @@ export default function MissionSystem({ onNavigate }) {
                       style={{ border: "1px solid #3a2510", background: "rgba(30,10,10,0.4)", padding: "14px 18px", marginBottom: 10, cursor: "not-allowed", opacity: 0.6 }}>
                       <div style={{ fontFamily: "'Cinzel Decorative', serif", fontSize: 15, color: "#704040" }}>{char.name}</div>
                       <div style={{ fontFamily: "'IM Fell English', serif", fontSize: 12, color: "#6a5040", marginTop: 3 }}>
-                        {char.gender} · {char.origin} · {char.career}
+                        {char.class || char.career || 'Operative'}
                       </div>
                       <div style={{ marginTop: 6, display: "flex", gap: 8, flexWrap: "wrap" }}>
                         <Badge>{rank}</Badge>
@@ -223,7 +236,7 @@ export default function MissionSystem({ onNavigate }) {
           <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
             {party.map((p, i) => (
               <span key={i} style={{ border: "1px solid #4a3010", background: "rgba(90,62,27,0.2)", padding: "4px 10px", fontSize: 10, color: "#9a7840" }}>
-                {p.name} (W{p.stats.WP})
+                {p.name} (W{p.stats.willpower})
               </span>
             ))}
           </div>
@@ -319,7 +332,7 @@ export default function MissionSystem({ onNavigate }) {
                   {enemy.description}
                 </div>
                 <div style={{ fontFamily: "'IM Fell English', serif", fontSize: 10, color: "#6a4030", marginTop: 6 }}>
-                  WS {enemy.stats.WS} | BS {enemy.stats.BS} | S {enemy.stats.S} | T {enemy.stats.T} | Armor {enemy.armor}
+                  MEL {enemy.stats.meleeSkill} | RNG {enemy.stats.rangeSkill} | STR {enemy.stats.strength} | TOU {enemy.stats.toughness} | Armor {enemy.armor}
                 </div>
               </div>
             ))}
@@ -552,88 +565,19 @@ export default function MissionSystem({ onNavigate }) {
           </div>
         </div>
         
-        {/* Combat Grid */}
+        {/* ── Phaser Combat Grid ── */}
         <div style={{ marginBottom: 16 }}>
-          <div style={{ fontFamily: "'Cinzel', serif", fontSize: 10, color: "#6a5030", letterSpacing: 2, marginBottom: 8 }}>BATTLEFIELD</div>
-          <div style={{ display: "grid", gridTemplateColumns: `repeat(${GRID_SIZE}, 16px)`, gap: 1, background: "#1a1510", padding: 4, border: "1px solid #3a2510" }}>
-            {Array.from({ length: GRID_SIZE * GRID_SIZE }).map((_, idx) => {
-              const x = idx % GRID_SIZE;
-              const y = Math.floor(idx / GRID_SIZE);
-              
-              // Check what's on this cell
-              const partyIdx = gridPositions.party.findIndex(p => p.x === x && p.y === y);
-              const enemyIdx = gridPositions.enemies.findIndex(e => e.x === x && e.y === y);
-               
-              let cellContent = null;
-              let cellColor = "#0f0a04";
-              let cellBorder = "#1a1510";
-              
-              // Get initiative order numbers
-              const getPartyInitNumber = (idx) => {
-                const initEntry = initiativeOrder.find(e => e.type === 'party' && e.index === idx);
-                return initEntry ? initiativeOrder.indexOf(initEntry) + 1 : idx + 1;
-              };
-              const getEnemyInitNumber = (idx) => {
-                const initEntry = initiativeOrder.find(e => e.type === 'enemy' && e.index === idx);
-                return initEntry ? initiativeOrder.indexOf(initEntry) + 1 : idx + 1;
-              };
-              
-              if (partyIdx !== -1) {
-                // Check if this party member is active in initiative
-                const initEntry = initiativeOrder.find(e => e.type === 'party' && e.index === partyIdx);
-                const isActive = initEntry && initiativeOrder.indexOf(initEntry) === currentTurn;
-                const wounds = partyWounds[partyIdx] || 0;
-                const maxWounds = party[partyIdx]?.wounds || 10;
-                const isDead = wounds >= maxWounds;
-                const initNum = getPartyInitNumber(partyIdx);
-                cellColor = isActive ? "#2a5a2a" : isDead ? "#1a1a1a" : "#1a3a1a";
-                cellBorder = isActive ? "#4a8a4a" : isDead ? "#3a2020" : "#2a4a2a";
-                cellContent = (
-                  <span style={{ color: isDead ? "#ff4040" : (isActive ? "#8afa8a" : "#5aba5a"), fontSize: 8, fontWeight: "bold" }}>
-                    {initNum}
-                  </span>
-                );
-              } else if (enemyIdx !== -1) {
-                // Check if this enemy is active in initiative
-                const initEntry = initiativeOrder.find(e => e.type === 'enemy' && e.index === enemyIdx);
-                const isActive = initEntry && initiativeOrder.indexOf(initEntry) === currentTurn;
-                const isDead = (enemyWounds[enemyIdx] || 0) <= 0;
-                const initNum = getEnemyInitNumber(enemyIdx);
-                cellColor = isActive ? "#5a2a2a" : isDead ? "#1a0a0a" : "#3a1a1a";
-                cellBorder = isActive ? "#8a4a4a" : isDead ? "#2a1515" : "#4a2a2a";
-                cellContent = <span style={{ color: "#fa5a5a", fontSize: 8, fontWeight: "bold" }}>{initNum}</span>;
-              }
-              
-              return (
-                <div
-                  key={idx}
-                  onClick={() => handleGridClick(x, y)}
-                  style={{
-                    width: 16,
-                    height: 16,
-                    background: cellColor,
-                    border: `1px solid ${cellBorder}`,
-                    display: "flex",
-                    alignItems: "center",
-                    justifyContent: "center",
-                    cursor: partyIdx !== -1 ? "pointer" : "default",
-                  }}
-                >
-                  {cellContent}
-                </div>
-              );
-            })}
+          <div style={{ fontFamily: "'Cinzel', serif", fontSize: 10, color: "#6a5030", letterSpacing: 2, marginBottom: 8 }}>
+            BATTLEFIELD
           </div>
+          <PhaserGame
+            gridState={gridState}
+            onGridClick={handleGridClick}
+          />
           <div style={{ display: "flex", gap: 16, marginTop: 8, fontSize: 10, color: "#6a5030" }}>
-            <span><span style={{ color: "#5aba5a" }}>■</span> Party ({initiativeOrder.filter(e => e.type === 'party').map((e, i) => {
-              const wounds = partyWounds[e.index] || 0;
-              const isDead = wounds >= (party[e.index]?.wounds || 10);
-              return isDead ? `${i + 1}*` : i + 1;
-            }).join(", ")})</span>
-            <span><span style={{ color: "#fa5a5a" }}>■</span> Enemies ({initiativeOrder.filter(e => e.type === 'enemy').map((e, i) => {
-              const isDead = (enemyWounds[e.index] || 0) <= 0;
-              return isDead ? `${i + 1}*` : i + 1;
-            }).join(", ")})</span>
+            <span><span style={{ color: "#5aba5a" }}>■</span> Party</span>
+            <span><span style={{ color: "#fa5a5a" }}>■</span> Enemies</span>
+            <span style={{ color: "#4a3a20" }}>Click to move · Active unit pulses</span>
           </div>
         </div>
         
@@ -696,7 +640,7 @@ export default function MissionSystem({ onNavigate }) {
                   MOVEMENT PHASE - Click on grid to move
                 </div>
                 <div style={{ fontFamily: "'IM Fell English', serif", fontSize: 10, color: "#5a4020", marginBottom: 8 }}>
-                  Range: {Math.floor((party[currentTurn]?.stats.Ag || 20) / 10) + 4} squares (Manhattan distance)
+                  Range: {Math.floor((party[currentActor?.index]?.stats.agility || 20) / 10) + 4} squares (Manhattan distance)
                 </div>
                 <button 
                   onClick={() => setCombatAction('attack')}
@@ -728,7 +672,7 @@ export default function MissionSystem({ onNavigate }) {
                   <button 
                     onClick={() => {
                       setCombatLog(prev => [...prev, { type: "player", text: `${party[currentPartyMember]?.name} holds position.` }]);
-                      setTimeout(() => advanceInitiative(currentTurn, initiativeOrder, gridPositions.party, gridPositions.enemies), 500);
+                      setTimeout(() => advanceInitiative(currentTurn, initiativeOrder, gridPositions.party, gridPositions.enemies, enemyWounds), 500);
                     }} 
                     style={{ 
                       borderColor: "#5a3e1b", 
@@ -827,8 +771,8 @@ export default function MissionSystem({ onNavigate }) {
     const initiative = [];
     
     party.forEach((p, i) => {
-      const agi = p.stats.Ag || 20;
-      const per = p.stats.Per || 20;
+      const agi = p.stats.agility || 20;
+      const per = p.stats.perception || 20;
       const stat = Math.max(agi, per);
       const roll = d100();
       const total = roll + stat;
@@ -841,10 +785,10 @@ export default function MissionSystem({ onNavigate }) {
         total,
       });
     });
-    
+
     generatedEncounter.enemies.forEach((e, i) => {
-      const agi = e.stats.Ag || 20;
-      const per = e.stats.Per || 20;
+      const agi = e.stats.agility || 20;
+      const per = e.stats.perception || 20;
       const stat = Math.max(agi, per);
       const roll = d100();
       const total = roll + stat;
@@ -990,7 +934,7 @@ export default function MissionSystem({ onNavigate }) {
     
     const actorIdx = actor.index;
     const currentPos = gridPositions.party[actorIdx];
-    const agi = party[actorIdx].stats.Ag || 20;
+    const agi = party[actorIdx].stats.agility || 20;
     const moveRange = Math.floor(agi / 10) + 4;
     
     // Calculate Manhattan distance
@@ -1028,11 +972,12 @@ export default function MissionSystem({ onNavigate }) {
     setCombatAction('attack');
   }
   
-  function advanceInitiative(turnIndex, initiativeArray, partyPositions, enemyPositions) {
+  function advanceInitiative(turnIndex, initiativeArray, partyPositions, enemyPositions, currentEnemyWounds) {
     const currentTurnIndex = turnIndex !== undefined ? turnIndex : currentTurn;
     const init = initiativeArray || initiativeOrder;
     const partyPos = partyPositions || gridPositions.party;
     const enemyPos = enemyPositions || gridPositions.enemies;
+    const eWounds = currentEnemyWounds !== undefined ? currentEnemyWounds : enemyWounds;
     let nextTurn = currentTurnIndex + 1;
     
     // Skip dead combatants
@@ -1040,7 +985,7 @@ export default function MissionSystem({ onNavigate }) {
       const entry = init[nextTurn];
       const isDead = entry.type === 'party' 
         ? (partyWounds[entry.index] || 0) >= (party[entry.index]?.wounds || 10)
-        : (enemyWounds[entry.index] || 0) <= 0;
+        : (eWounds[entry.index] || 0) <= 0;
       
       console.log("Dead check: entry", nextTurn, "=", entry.name, "type:", entry.type, "index:", entry.index, "isDead:", isDead, "wounds:", entry.type === 'party' ? partyWounds[entry.index] : enemyWounds[entry.index]);
       
@@ -1056,7 +1001,7 @@ export default function MissionSystem({ onNavigate }) {
         const entry = init[nextTurn];
         const isDead = entry.type === 'party' 
           ? (partyWounds[entry.index] || 0) >= (party[entry.index]?.wounds || 10)
-          : (enemyWounds[entry.index] || 0) <= 0;
+          : (eWounds[entry.index] || 0) <= 0;
         
         if (!isDead) break;
         nextTurn++;
@@ -1068,7 +1013,7 @@ export default function MissionSystem({ onNavigate }) {
     setCombatAction('movement'); // Reset to movement phase for next actor
     
     // Check if all enemies are dead
-    const allEnemyDead = enemyWounds.every(w => w <= 0);
+    const allEnemyDead = eWounds.every(w => w <= 0);
     if (allEnemyDead) {
       console.log("advanceInitiative: all enemies dead, not scheduling enemy turn");
       return;
@@ -1129,28 +1074,37 @@ export default function MissionSystem({ onNavigate }) {
     const target = adjacentEnemies[0];
     const enemy = target.enemy;
     const enemyIdx = target.index;
-    const ws = char.stats.WS || 20;
+    const ws = char.stats.meleeSkill || 20;
     const roll = d100();
     const hit = roll <= ws;
-    
-    let log = [{ type: "player", text: `${char.name} attacks ${enemy.name} (WS ${ws}): rolled ${roll} vs ${ws}... ${hit ? "HIT!" : "MISS!"}` }];
-    
+
+    let log = [{ type: "player", text: `${char.name} attacks ${enemy.name} (MELEE ${ws}): rolled ${roll}... ${hit ? "HIT!" : "MISS!"}` }];
+
     if (hit) {
+      eventBridge.emit('combat-hit', { targetType: 'enemy', targetIndex: enemyIdx });
       const dmg = d6() + 3;
       const newEnemyWounds = [...enemyWounds];
       newEnemyWounds[enemyIdx] = Math.max(0, newEnemyWounds[enemyIdx] - dmg);
       setEnemyWounds(newEnemyWounds);
       log.push({ type: "player", text: `Dealt ${dmg} damage! Enemy: ${Math.max(0, newEnemyWounds[enemyIdx])}/${enemy.wounds} wounds.` });
-      
+
       if (newEnemyWounds[enemyIdx] <= 0) {
+        eventBridge.emit('combat-death', { targetType: 'enemy', targetIndex: enemyIdx });
         log.push({ type: "player", text: `The ${enemy.name} is DEFEATED!` });
+
+        // Check if all enemies defeated
+        const allDead = newEnemyWounds.every(w => w <= 0);
+        if (allDead) {
+          setCombatLog(prevLog => [...prevLog, ...log]);
+          return; // Don't advance - victory will be handled
+        }
       }
     }
     
     setCombatLog(prevLog => [...prevLog, ...log]);
     
     // Advance initiative
-    setTimeout(() => advanceInitiative(currentTurn, initiativeOrder, gridPositions.party, gridPositions.enemies), 1000);
+    setTimeout(() => advanceInitiative(currentTurn, initiativeOrder, gridPositions.party, gridPositions.enemies, enemyWounds), 1000);
   }
 
   function tryEscape() {
@@ -1158,17 +1112,17 @@ export default function MissionSystem({ onNavigate }) {
     if (!actor || actor.type !== 'party') return;
     
     const char = party[actor.index];
-    const ag = char.stats.Ag || 20;
+    const ag = char.stats.agility || 20;
     const roll = d100();
     const success = roll <= ag;
-    
-    const log = [{ type: "player", text: `${char.name} escape attempt (Ag ${ag}): rolled ${roll}. ${success ? "SUCCESS!" : "FAILED!"}` }];
+
+    const log = [{ type: "player", text: `${char.name} escape attempt (AGI ${ag}): rolled ${roll}. ${success ? "SUCCESS!" : "FAILED!"}` }];
     setCombatLog(prevLog => [...prevLog, ...log]);
     
     if (success) {
       setTimeout(() => completeMission(false), 1500);
     } else {
-      setTimeout(() => advanceInitiative(currentTurn, initiativeOrder, gridPositions.party, gridPositions.enemies), 1000);
+      setTimeout(() => advanceInitiative(currentTurn, initiativeOrder, gridPositions.party, gridPositions.enemies, enemyWounds), 1000);
     }
   }
 
@@ -1190,7 +1144,7 @@ export default function MissionSystem({ onNavigate }) {
     const enemyWoundsCurrent = enemyWounds[actor.index] || 0;
     if (enemyWoundsCurrent <= 0) {
       console.log("enemyTurn: enemy is dead, skipping turn");
-      setTimeout(() => advanceInitiative(actorIndex, init, partyPos, enemyPosList), 100);
+      setTimeout(() => advanceInitiative(actorIndex, init, partyPos, enemyPosList, enemyWounds), 100);
       return;
     }
     
@@ -1221,13 +1175,13 @@ export default function MissionSystem({ onNavigate }) {
     if (nearestIdx === -1) {
       // No living targets
       setCombatLog(prevLog => [...prevLog, { type: "enemy", text: `${enemy.name} has no targets!` }]);
-      setTimeout(() => advanceInitiative(), 500);
+      setTimeout(() => advanceInitiative(actorIndex, init, partyPos, enemyPosList, enemyWounds), 500);
       return;
     }
     
     const target = party[nearestIdx];
     const targetPos = partyPos[nearestIdx];
-    const agi = enemy.stats.Ag || 20;
+    const agi = enemy.stats.agility || 20;
     const moveRange = Math.floor(agi / 10) + 4;
     
     let log = [];
@@ -1287,20 +1241,22 @@ export default function MissionSystem({ onNavigate }) {
     const attackRange = Math.max(attackDx, attackDy);
     
     if (attackRange <= 1) {
-      const ews = enemy.stats.WS || 20;
+      const ews = enemy.stats.meleeSkill || 20;
       const roll = d100();
       const hit = roll <= ews;
-      
-      log.push({ type: "enemy", text: `${enemy.name} attacks ${target.name} (WS ${ews}): rolled ${roll} vs ${ews}... ${hit ? "HIT!" : "MISS!"}` });
-      
+
+      log.push({ type: "enemy", text: `${enemy.name} attacks ${target.name} (MELEE ${ews}): rolled ${roll}... ${hit ? "HIT!" : "MISS!"}` });
+
       if (hit) {
-        const dmg = d6() + Math.floor((enemy.stats.S || 20) / 10);
+        eventBridge.emit('combat-hit', { targetType: 'party', targetIndex: nearestIdx });
+        const dmg = d6() + Math.floor((enemy.stats.strength || 20) / 10);
         const newPartyWounds = [...partyWounds];
         newPartyWounds[nearestIdx] = (newPartyWounds[nearestIdx] || 0) + dmg;
         setPartyWounds(newPartyWounds);
         log.push({ type: "enemy", text: `Enemy deals ${dmg} damage! ${target.name}: ${Math.max(0, (target.wounds || 10) - newPartyWounds[nearestIdx])}/${target.wounds || 10} wounds.` });
-        
+
         if (newPartyWounds[nearestIdx] >= (target.wounds || 10)) {
+          eventBridge.emit('combat-death', { targetType: 'party', targetIndex: nearestIdx });
           log.push({ type: "enemy", text: `${target.name} has fallen!` });
           
           // Check if this party member has fate available
@@ -1320,9 +1276,16 @@ export default function MissionSystem({ onNavigate }) {
     
     setCombatLog(prevLog => [...prevLog, ...log]);
     
+    // Check if all enemies are dead
+    const allEnemiesDead = enemyWounds.every(w => w <= 0);
+    if (allEnemiesDead) {
+      console.log("enemyTurn END: all enemies dead, not advancing");
+      return;
+    }
+    
     console.log(">>> enemyTurn END, calling advanceInitiative with", actorIndex);
     // Advance initiative with updated positions
-    setTimeout(() => advanceInitiative(actorIndex, init, partyPos, newEnemyPositions), 1000);
+    setTimeout(() => advanceInitiative(actorIndex, init, partyPos, newEnemyPositions, enemyWounds), 1000);
   }
 
   function completeMission(victory) {
@@ -1333,8 +1296,8 @@ export default function MissionSystem({ onNavigate }) {
     const combatResult = {
       label: currentCheck.label,
       flavor: victory ? "All enemies defeated" : "Escaped from combat",
-      stat: "WS",
-      statValue: char.stats.WS || 20,
+      stat: "meleeSkill",
+      statValue: char?.stats?.meleeSkill || 20,
       difficulty: currentCheck.difficulty,
       roll: 0,
       passed: victory,
@@ -1380,7 +1343,6 @@ export default function MissionSystem({ onNavigate }) {
     setPartyWounds([]);
     setEnemyWounds([]);
     setCurrentEnemy(0);
-    setIsPlayerTurn(true);
     setFateSpentInMission([]);
     setCurrentCheckIndex(0);
     setCheckResults([]);
@@ -1454,7 +1416,7 @@ export default function MissionSystem({ onNavigate }) {
     }
 
     if (extremeFails >= 3) {
-      const toughness  = char.stats.T || 20;
+      const toughness  = char.stats.toughness || 20;
       const deathRoll  = d100();
       const survived   = deathRoll <= toughness;
 
@@ -1487,7 +1449,7 @@ export default function MissionSystem({ onNavigate }) {
   function spendFate() {
     if (selectedChar.fate <= 0) { confirmDeath(); return; }
     const newFate   = selectedChar.fate - 1;
-    const toughness = selectedChar.stats.T || 20;
+    const toughness = selectedChar.stats.toughness || 20;
     const reroll    = d100();
     if (reroll <= toughness) {
       // Survived with fate
@@ -1541,7 +1503,7 @@ export default function MissionSystem({ onNavigate }) {
     setCombatLog(prevLog => [...prevLog, { type: "system", text: `FATE POINT SPENT! ${char.name} survives at 1 HP!` }]);
     
     // Advance initiative
-    setTimeout(() => advanceInitiative(currentTurn, initiativeOrder, gridPositions.party, gridPositions.enemies), 500);
+    setTimeout(() => advanceInitiative(currentTurn, initiativeOrder, gridPositions.party, gridPositions.enemies, enemyWounds), 500);
   }
 
   function confirmPartyMemberDeath(charIndex) {
@@ -1555,7 +1517,7 @@ export default function MissionSystem({ onNavigate }) {
     setPendingFateIndex(null);
     
     // Advance initiative
-    setTimeout(() => advanceInitiative(currentTurn, initiativeOrder, gridPositions.party, gridPositions.enemies), 500);
+    setTimeout(() => advanceInitiative(currentTurn, initiativeOrder, gridPositions.party, gridPositions.enemies, enemyWounds), 500);
   }
 
   function handleNextPartyMember() {

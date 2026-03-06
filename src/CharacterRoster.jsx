@@ -15,8 +15,13 @@ export default function CharacterRoster({ onNavigate }) {
   }
 
   const STAT_NAMES = {
-    WS: "WS", BS: "BS", S: "STR", T: "TOU",
-    Ag: "AG", Int: "INT", Per: "PER", WP: "WP", Fel: "FEL"
+    meleeSkill:   "MEL", rangeSkill:   "RNG", strength:   "STR",
+    toughness:    "TOU", agility:      "AGI", perception: "PER",
+    intelligence: "INT", willpower:    "WP",  fellowship: "FEL",
+    psyRating:    "PSY",
+    // Legacy keys (old characters)
+    WS: "MEL", BS: "RNG", S: "STR", T: "TOU", Ag: "AGI",
+    Int: "INT", Per: "PER", WP: "WP", Fel: "FEL",
   };
 
   return (
@@ -74,7 +79,7 @@ export default function CharacterRoster({ onNavigate }) {
               <div className="card-header">
                 <div>
                   <div className="card-name">{char.name}</div>
-                  <div className="card-sub">{char.gender} · {char.origin} · {char.career}</div>
+                  <div className="card-sub">{char.class || char.career || 'Operative'}</div>
                   <div style={{ marginTop: 4 }}>
 				  <span style={{ border: "1px solid #4a3010", background: "rgba(90,62,27,0.2)", padding: "3px 10px", fontSize: 10, letterSpacing: 2, color: "#9a7840", marginRight: 6 }}>
 					{getRank(char.xp || 0)}
@@ -101,7 +106,7 @@ export default function CharacterRoster({ onNavigate }) {
                     {Object.entries(char.stats).map(([key, val]) => (
                       <div key={key} className="stat-cell">
                         <div className="stat-cell-label">{STAT_NAMES[key] || key}</div>
-                        <div className="stat-cell-val" style={{ color: val >= 35 ? "#6ee7b7" : val <= 25 ? "#f87171" : "#e2d5b0" }}>{val}</div>
+                        <div className="stat-cell-val" style={{ color: val >= 40 ? "#a78bfa" : val >= 35 ? "#6ee7b7" : val <= 22 ? "#f87171" : "#e2d5b0" }}>{val}</div>
                       </div>
                     ))}
                   </div>
