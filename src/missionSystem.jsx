@@ -44,6 +44,21 @@ function hitLocation(roll) {
 
 function getStrBonus(strength) { return Math.floor((strength || 10) / 10); }
 
+/**
+ * Perpendicular distance from point (px, py) to the ray starting at (ax, ay)
+ * going through (bx, by). Returns Infinity if the point is behind the shooter.
+ */
+function perpDistToRay(px, py, ax, ay, bx, by) {
+  const dx = bx - ax, dy = by - ay;
+  const lenSq = dx * dx + dy * dy;
+  if (lenSq === 0) return Infinity;
+  const t = ((px - ax) * dx + (py - ay) * dy) / lenSq;
+  if (t < 0) return Infinity; // point is behind the shooter
+  const closestX = ax + t * dx;
+  const closestY = ay + t * dy;
+  return Math.sqrt((px - closestX) ** 2 + (py - closestY) ** 2);
+}
+
 // Equipment items may be stored as string IDs or as {id,name,desc} objects
 function itemId(item) { return typeof item === 'string' ? item : item?.id; }
 
@@ -210,16 +225,22 @@ export default function MissionSystem({ onNavigate }) {
   const [remainingAction, setRemainingAction] = useState('full'); // 'full'=full action left | 'half'=half action used
   const [fireMode, setFireMode] = useState('single');     // 'single' | 'semi' | 'full'
   const [enemyPinned, setEnemyPinned] = useState([]);     // boolean[] — pinned enemies get -20 on next attack
+  const [partyReactionsUsed,  setPartyReactionsUsed]  = useState([]); // boolean[] — party member used their 1 reaction this round
+  const [enemyReactionsUsed,  setEnemyReactionsUsed]  = useState([]); // boolean[] — enemy used their 1 reaction this round
 
   // Initiative system
   const [initiativeOrder, setInitiativeOrder] = useState([]); // Array of {type: 'party'|'enemy', index: number, initiative: number}
   const [currentTurn, setCurrentTurn] = useState(0); // Index in initiativeOrder
-  
-  // Always-current ref for enemyPinned — prevents stale closure in setTimeout callbacks
-  const enemyPinnedRef = useRef([]);
-  // Keep partyWoundsRef in sync so setTimeout callbacks always see the latest value
-  useEffect(() => { partyWoundsRef.current = partyWounds; }, [partyWounds]);
-  useEffect(() => { enemyPinnedRef.current = enemyPinned; }, [enemyPinned]);
+
+  // Always-current refs — prevent stale closures in setTimeout callbacks
+  const enemyPinnedRef         = useRef([]);
+  const partyReactionsUsedRef  = useRef([]);
+  const enemyReactionsUsedRef  = useRef([]);
+  // Keep refs in sync
+  useEffect(() => { partyWoundsRef.current          = partyWounds;          }, [partyWounds]);
+  useEffect(() => { enemyPinnedRef.current          = enemyPinned;          }, [enemyPinned]);
+  useEffect(() => { partyReactionsUsedRef.current   = partyReactionsUsed;   }, [partyReactionsUsed]);
+  useEffect(() => { enemyReactionsUsedRef.current   = enemyReactionsUsed;   }, [enemyReactionsUsed]);
 
   // Derived values for convenience
   const activeChar = party[currentPartyMember] || party[0] || null;
@@ -645,36 +666,6 @@ export default function MissionSystem({ onNavigate }) {
     
     return (
       <Screen onNavigate={onNavigate} title="Combat Encounter" subtitle={currentEnemyData?.name || "Battle"} onBack={() => { setPhase("briefing"); setCombatLog([]); setPartyWounds(party.map(() => 0)); setEnemyWounds(encounter?.enemies.map(e => e.wounds) || []); setIsPlayerTurn(true); }}>
-        {/* Initiative Order Display */}
-        <div style={{ border: "1px solid #3a2510", background: "rgba(15,10,4,0.85)", padding: "10px 14px", marginBottom: 12 }}>
-          <div style={{ fontFamily: "'Cinzel', serif", fontSize: 10, color: "#6a5030", letterSpacing: 2, marginBottom: 6 }}>INITIATIVE ORDER</div>
-          {(!initiativeOrder || initiativeOrder.length === 0) ? (
-            <div style={{ fontSize: 10, color: "#5a4020" }}>Calculating...</div>
-          ) : (
-            <div style={{ display: "flex", gap: 4, flexWrap: "wrap" }}>
-              {initiativeOrder.map((entry, idx) => {
-                const isCurrentTurn = idx === currentTurn;
-                const isDead = entry.type === 'party' 
-                  ? (partyWounds[entry.index] || 0) >= (party[entry.index]?.wounds || 10)
-                  : (enemyWounds[entry.index] || 0) <= 0;
-                
-                return (
-                  <span key={idx} style={{ 
-                    border: isCurrentTurn ? "1px solid #c09040" : "1px solid #3a2510", 
-                    background: isCurrentTurn ? "rgba(60,45,10,0.5)" : "rgba(15,10,4,0.85)", 
-                    padding: "4px 8px", 
-                    fontSize: 10, 
-                    color: isDead ? "#504030" : (entry.type === 'party' ? "#6a9a6a" : "#9a5a5a"),
-                    opacity: isDead ? 0.5 : 1,
-                  }}>
-                    {idx + 1}. {entry.name} ({entry.total})
-                  </span>
-                );
-              })}
-            </div>
-          )}
-        </div>
-        
         {/* ── Combined Status Row: Party (left) + Hostiles (right) ── */}
         <div style={{ display: "flex", gap: 8, marginBottom: 12 }}>
 
@@ -694,16 +685,18 @@ export default function MissionSystem({ onNavigate }) {
                 const barColor = hpPct > 0.5 ? '#6ee7b7' : hpPct > 0.25 ? '#f59e0b' : '#f87171';
                 const aw = getActiveWeapon(p, i, activeWeapons);
                 const wepIsRanged = aw && aw.type !== 'Melee';
+                const initRank = initiativeOrder.findIndex(e => e.type === 'party' && e.index === i);
+                const reactionUsed = partyReactionsUsed[i] || false;
                 return (
                   <div key={i}
                     onClick={() => alive && setDetailPopup({ type: 'party', index: i })}
                     style={{ cursor: alive ? 'pointer' : 'default', padding: '4px 6px', border: isActiveTurn ? '1px solid #c09040' : '1px solid #2a1808', background: isActiveTurn ? 'rgba(60,45,10,0.2)' : 'rgba(10,8,4,0.4)', opacity: alive ? 1 : 0.5 }}
                     onMouseEnter={e => { if (alive) e.currentTarget.style.borderColor = '#6a5030'; }}
                     onMouseLeave={e => { e.currentTarget.style.borderColor = isActiveTurn ? '#c09040' : '#2a1808'; }}>
-                    {/* Row: name | bar+hp | weapon */}
+                    {/* Row: name | bar+hp */}
                     <div style={{ display: 'flex', alignItems: 'center', gap: 5 }}>
                       <span style={{ fontFamily: "'Cinzel', serif", fontSize: 9, color: alive ? (isActiveTurn ? '#c09040' : '#a89070') : '#604040', flex: 1, minWidth: 0, overflow: 'hidden', whiteSpace: 'nowrap', textOverflow: 'ellipsis' }}>
-                        {isActiveTurn ? '▶ ' : ''}{p.name}
+                        {initRank >= 0 ? `${initRank + 1}. ` : ''}{isActiveTurn ? '▶ ' : ''}{p.name}
                       </span>
                       {alive ? (
                         <div style={{ display: 'flex', alignItems: 'center', gap: 3, flexShrink: 0 }}>
@@ -716,9 +709,16 @@ export default function MissionSystem({ onNavigate }) {
                         <span style={{ fontFamily: "'IM Fell English', serif", fontSize: 8, color: '#604040', flexShrink: 0 }}>FALLEN</span>
                       )}
                     </div>
-                    {/* Weapon row */}
-                    <div style={{ marginTop: 2, fontFamily: "'IM Fell English', serif", fontSize: 8, color: wepIsRanged ? '#4a8aaa' : '#906040' }}>
-                      {wepIsRanged ? '🔫' : '⚔'} {(aw?.name || 'Fists').substring(0, 14)}
+                    {/* Weapon + reaction row */}
+                    <div style={{ marginTop: 2, display: 'flex', alignItems: 'center', gap: 6 }}>
+                      <span style={{ fontFamily: "'IM Fell English', serif", fontSize: 8, color: wepIsRanged ? '#4a8aaa' : '#906040' }}>
+                        {wepIsRanged ? '🔫' : '⚔'} {(aw?.name || 'Fists').substring(0, 14)}
+                      </span>
+                      {alive && (
+                        <span title={reactionUsed ? 'Reaction spent' : 'Reaction ready'} style={{ fontSize: 10, opacity: reactionUsed ? 0.5 : 1 }}>
+                          {reactionUsed ? '🜄' : '🛡'}
+                        </span>
+                      )}
                     </div>
                   </div>
                 );
@@ -739,9 +739,10 @@ export default function MissionSystem({ onNavigate }) {
                 const wPct = w / maxW;
                 const isActiveTurn = initiativeOrder[currentTurn]?.type === 'enemy' && initiativeOrder[currentTurn]?.index === i;
                 const barColor = wPct > 0.6 ? '#f87171' : wPct > 0.3 ? '#f59e0b' : '#c04040';
-                // Primary weapon for display
                 const eWep = (enemy.weapons || [])[0];
                 const eWepIsRanged = eWep && eWep.type !== 'Melee';
+                const initRank = initiativeOrder.findIndex(e => e.type === 'enemy' && e.index === i);
+                const reactionUsed = enemyReactionsUsed[i] || false;
                 return (
                   <div key={i}
                     onClick={() => alive && setDetailPopup({ type: 'enemy', index: i })}
@@ -751,7 +752,7 @@ export default function MissionSystem({ onNavigate }) {
                     {/* Row: name | bar+hp */}
                     <div style={{ display: 'flex', alignItems: 'center', gap: 5 }}>
                       <span style={{ fontFamily: "'Cinzel', serif", fontSize: 9, color: alive ? (isActiveTurn ? '#c09040' : '#c05050') : '#504030', flex: 1, minWidth: 0, overflow: 'hidden', whiteSpace: 'nowrap', textOverflow: 'ellipsis' }}>
-                        {isActiveTurn ? '▶ ' : ''}{enemy.name}{!alive ? ' ✝' : ''}{alive && enemyPinned[i] ? ' 📌' : ''}
+                        {initRank >= 0 ? `${initRank + 1}. ` : ''}{isActiveTurn ? '▶ ' : ''}{enemy.name}{!alive ? ' ✝' : ''}{alive && enemyPinned[i] ? ' 📌' : ''}
                       </span>
                       {alive ? (
                         <div style={{ display: 'flex', alignItems: 'center', gap: 3, flexShrink: 0 }}>
@@ -764,12 +765,19 @@ export default function MissionSystem({ onNavigate }) {
                         <span style={{ fontFamily: "'IM Fell English', serif", fontSize: 8, color: '#504030', flexShrink: 0 }}>KIA</span>
                       )}
                     </div>
-                    {/* Weapon row */}
-                    {eWep && (
-                      <div style={{ marginTop: 2, fontFamily: "'IM Fell English', serif", fontSize: 8, color: eWepIsRanged ? '#4a6a8a' : '#7a3030' }}>
-                        {eWepIsRanged ? '🔫' : '⚔'} {eWep.name.substring(0, 14)}
-                      </div>
-                    )}
+                    {/* Weapon + reaction row */}
+                    <div style={{ marginTop: 2, display: 'flex', alignItems: 'center', gap: 6 }}>
+                      {eWep && (
+                        <span style={{ fontFamily: "'IM Fell English', serif", fontSize: 8, color: eWepIsRanged ? '#4a6a8a' : '#7a3030' }}>
+                          {eWepIsRanged ? '🔫' : '⚔'} {eWep.name.substring(0, 14)}
+                        </span>
+                      )}
+                      {alive && (
+                        <span title={reactionUsed ? 'Reaction spent' : 'Reaction ready'} style={{ fontSize: 10, opacity: reactionUsed ? 0.5 : 1 }}>
+                          {reactionUsed ? '🜄' : '🛡'}
+                        </span>
+                      )}
+                    </div>
                   </div>
                 );
               })}
@@ -1005,7 +1013,20 @@ export default function MissionSystem({ onNavigate }) {
                 );
               }
 
-              // Melee weapon active
+              // Melee weapon active — compute adjacent enemies for target chooser
+              const attackerPos = gridPositions.party[actIdx];
+              const adjacentEnemiesUI = [];
+              if (attackerPos) {
+                enemyWounds.forEach((w, idx) => {
+                  if (w > 0) {
+                    const ep = gridPositions.enemies[idx];
+                    if (ep && Math.max(Math.abs(ep.x - attackerPos.x), Math.abs(ep.y - attackerPos.y)) <= 1) {
+                      adjacentEnemiesUI.push({ index: idx, enemy: encounter?.enemies[idx] });
+                    }
+                  }
+                });
+              }
+
               return (
                 <>
                   <div style={{ fontFamily: "'Cinzel', serif", fontSize: 11, color: "#6a8060", marginBottom: 4 }}>
@@ -1014,26 +1035,75 @@ export default function MissionSystem({ onNavigate }) {
                   <div style={{ fontFamily: "'IM Fell English', serif", fontSize: 10, color: "#5a4020", marginBottom: 8 }}>
                     ⚔ Melee · Standard (+0) · All-Out (+20 to hit, enemy cannot react)
                   </div>
-                  <div style={{ display: "flex", gap: 10, flexWrap: "wrap" }}>
-                    <button
-                      onClick={() => playerAttack('standard')}
-                      style={{ borderColor: "#6a8060", color: "#80c080", padding: "10px 18px" }}>
-                      ⚔ Standard Attack
-                    </button>
-                    <button
-                      onClick={() => playerAttack('allout')}
-                      style={{ borderColor: "#c04040", color: "#e06060", padding: "10px 18px" }}>
-                      ⚔⚔ All-Out Attack
-                    </button>
-                    <button
-                      onClick={() => {
-                        setCombatLog(prev => [...prev, { type: "player", text: `${actorChar?.name} holds position.` }]);
-                        setTimeout(() => advanceInitiative(currentTurn, initiativeOrder, gridPositions.party, gridPositions.enemies, enemyWounds), 500);
-                      }}
-                      style={{ borderColor: "#5a3e1b", color: "#8a7050", padding: "10px 18px" }}>
-                      Skip Attack
-                    </button>
-                  </div>
+
+                  {adjacentEnemiesUI.length === 0 ? (
+                    <>
+                      <div style={{ fontFamily: "'IM Fell English', serif", fontSize: 10, color: "#7a5030", marginBottom: 8 }}>
+                        No enemy in reach — move closer to attack.
+                      </div>
+                      <button
+                        onClick={() => {
+                          setCombatLog(prev => [...prev, { type: "player", text: `${actorChar?.name} holds position.` }]);
+                          setTimeout(() => advanceInitiative(currentTurn, initiativeOrder, gridPositions.party, gridPositions.enemies, enemyWounds), 500);
+                        }}
+                        style={{ borderColor: "#5a3e1b", color: "#8a7050", padding: "10px 18px" }}>
+                        Skip Attack
+                      </button>
+                    </>
+                  ) : adjacentEnemiesUI.length === 1 ? (
+                    <div style={{ display: "flex", gap: 10, flexWrap: "wrap" }}>
+                      <button
+                        onClick={() => playerAttack('standard')}
+                        style={{ borderColor: "#6a8060", color: "#80c080", padding: "10px 18px" }}>
+                        ⚔ Standard Attack
+                      </button>
+                      <button
+                        onClick={() => playerAttack('allout')}
+                        style={{ borderColor: "#c04040", color: "#e06060", padding: "10px 18px" }}>
+                        ⚔⚔ All-Out Attack
+                      </button>
+                      <button
+                        onClick={() => {
+                          setCombatLog(prev => [...prev, { type: "player", text: `${actorChar?.name} holds position.` }]);
+                          setTimeout(() => advanceInitiative(currentTurn, initiativeOrder, gridPositions.party, gridPositions.enemies, enemyWounds), 500);
+                        }}
+                        style={{ borderColor: "#5a3e1b", color: "#8a7050", padding: "10px 18px" }}>
+                        Skip Attack
+                      </button>
+                    </div>
+                  ) : (
+                    // 2+ adjacent enemies — show per-target rows
+                    <>
+                      <div style={{ fontFamily: "'IM Fell English', serif", fontSize: 9, color: "#806040", marginBottom: 6 }}>
+                        Choose target:
+                      </div>
+                      {adjacentEnemiesUI.map(ae => (
+                        <div key={ae.index} style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 6 }}>
+                          <span style={{ fontFamily: "'Cinzel', serif", fontSize: 9, color: "#c07050", minWidth: 80 }}>
+                            {ae.enemy?.name}
+                          </span>
+                          <button
+                            onClick={() => playerAttack('standard', ae.index)}
+                            style={{ borderColor: "#6a8060", color: "#80c080", padding: "6px 12px", fontSize: 10 }}>
+                            ⚔ Standard
+                          </button>
+                          <button
+                            onClick={() => playerAttack('allout', ae.index)}
+                            style={{ borderColor: "#c04040", color: "#e06060", padding: "6px 12px", fontSize: 10 }}>
+                            ⚔⚔ All-Out
+                          </button>
+                        </div>
+                      ))}
+                      <button
+                        onClick={() => {
+                          setCombatLog(prev => [...prev, { type: "player", text: `${actorChar?.name} holds position.` }]);
+                          setTimeout(() => advanceInitiative(currentTurn, initiativeOrder, gridPositions.party, gridPositions.enemies, enemyWounds), 500);
+                        }}
+                        style={{ borderColor: "#5a3e1b", color: "#8a7050", padding: "6px 14px", fontSize: 10, marginTop: 4 }}>
+                        Skip Attack
+                      </button>
+                    </>
+                  )}
                 </>
               );
             })()}
@@ -1137,6 +1207,8 @@ export default function MissionSystem({ onNavigate }) {
     });
     setActiveWeapons(initActiveWeapons);
     setEnemyPinned(generatedEncounter.enemies.map(() => false));
+    setPartyReactionsUsed(party.map(() => false));
+    setEnemyReactionsUsed(generatedEncounter.enemies.map(() => false));
     setRemainingAction('full');
     setFireMode('single');
 
@@ -1416,7 +1488,15 @@ export default function MissionSystem({ onNavigate }) {
     const dos = hit ? Math.floor((targetNum - roll) / 10) : 0;
 
     const modeLabel = mode === 'semi' ? 'Semi-Auto Burst' : mode === 'full' ? 'Full Auto' : (aiming ? 'Aimed Shot' : 'Single Shot');
-    const modStr = hitMod > 0 ? `+${hitMod}` : hitMod < 0 ? `${hitMod}` : '±0';
+
+    // Build a readable modifier breakdown so each component is visible
+    const modParts = [];
+    const fmt = n => n > 0 ? `+${n}` : `${n}`;
+    if (rangeMod !== 0) modParts.push(`${fmt(rangeMod)} ${rangeBand}`);
+    if (aiming && mode === 'single') modParts.push('+20 Aim');
+    if (mode === 'full') modParts.push('−10 FA');
+    const modBreakdown = modParts.length ? ` [${modParts.join(', ')}]` : '';
+    const netStr = hitMod > 0 ? `+${hitMod}` : hitMod < 0 ? `${hitMod}` : '±0';
 
     // Full Auto jam: 94–100 = weapon jam, turn lost (show 2 misfiring rounds)
     if (mode === 'full' && roll >= 94) {
@@ -1431,20 +1511,9 @@ export default function MissionSystem({ onNavigate }) {
       return;
     }
 
-    let log = [{ type: "player", text: `${char.name} [${modeLabel}] at ${target.name} — ${rangeBand} (${distTiles * 3}m) · PER ${per} ${modStr} = ${targetNum}: rolled ${roll}... ${hit ? `HIT! (${dos} DoS)` : 'MISS!'}` }];
+    let log = [];
 
-    // Determine hit count: 1 base hit + 1 per DoS, capped at weapon RoF for mode
-    // Every 10 below the target number = 1 DoS = 1 additional hit
-    let hitCount = 0;
-    if (hit) {
-      if (mode === 'semi') hitCount = Math.min(1 + dos, rof.semiAuto || 1);
-      else if (mode === 'full') hitCount = Math.min(1 + dos, rof.fullAuto || 1);
-      else hitCount = 1;
-      if (hitCount > 1) log.push({ type: "player", text: `${hitCount} rounds connect! (${dos} DoS)` });
-    }
-
-    // Shot animation: always fire the full magazine count for the selected mode
-    // so LMG full-auto always shows 10 tracers regardless of how many hit
+    // ── Animation: always fire the full RoF count so LMG shows 10 tracers ──
     const animCount = mode === 'semi' ? (rof.semiAuto || 1)
                     : mode === 'full' ? (rof.fullAuto || 1)
                     : 1;
@@ -1456,29 +1525,98 @@ export default function MissionSystem({ onNavigate }) {
       weaponClass: activeWep.class,
     });
 
-    // Resolve all hits
-    const newEnemyWounds = [...enemyWounds];
-    const firstLoc = hit ? hitLocation(roll) : null;
-    let allDefeated = false;
+    // ── Per-round hit resolution (recoil −5/round, scatter on miss) ──────
+    const weaponAccuracy = activeWep.accuracy ?? 0;
+    const rounds = mode === 'single' ? 1
+                 : mode === 'semi'   ? (rof.semiAuto || 3)
+                 :                     (rof.fullAuto  || 10);
 
-    if (hitCount > 0) {
-      // One dodge attempt covers the whole burst (target dives for cover or doesn't)
-      const dodgeRoll = d100();
-      const dodgeTarget = target.stats.agility || 20;
-      const dodged = dodgeRoll <= dodgeTarget;
-      if (dodged) {
-        log.push({ type: "enemy", text: `${target.name} DODGES the burst! (AGI ${dodgeTarget}: rolled ${dodgeRoll})` });
+    if (mode === 'single') {
+      log.push({ type: "player", text: `${char.name} [${modeLabel}] at ${target.name} — ${rangeBand} (${distTiles * 3}m)${modBreakdown} · PER ${per} = ${targetNum} (net ${netStr}): rolled ${roll}... ${hit ? 'HIT!' : 'MISS!'}` });
+    } else {
+      log.push({ type: "player", text: `${char.name} [${modeLabel} ×${rounds}] at ${target.name} — ${rangeBand} (${distTiles * 3}m)${modBreakdown} · PER ${per} = ${targetNum} (−5 recoil/round)` });
+    }
+
+    const newEnemyWounds = [...enemyWounds];
+    let totalHitsOnTarget = 0;
+    let firstHitRoll      = null;
+    let scatterHits       = 0;
+    let allDefeated       = false;
+
+    for (let r = 0; r < rounds; r++) {
+      const recoilPenalty = r * 5;
+      const roundTarget   = Math.max(5, targetNum - recoilPenalty);
+      const roundRoll     = r === 0 ? roll : d100(); // reuse initial roll for round 0 (jam-safe)
+      const roundHit      = roundRoll <= roundTarget;
+
+      if (mode !== 'single') {
+        log.push({ type: "player", text: `  Rnd ${r + 1}: target ${roundTarget}${recoilPenalty ? ` (−${recoilPenalty} recoil)` : ''} → rolled ${roundRoll}... ${roundHit ? 'HIT' : 'miss'}` });
+      }
+
+      if (roundHit) {
+        totalHitsOnTarget++;
+        if (firstHitRoll === null) firstHitRoll = roundRoll;
+      } else if (mode !== 'single' && weaponAccuracy > 0) {
+        // Scatter: any living non-target enemy within the cone gets a stray-round chance
+        enemyWounds.forEach((w, eIdx) => {
+          if (eIdx === targetIdx || newEnemyWounds[eIdx] <= 0) return;
+          const ep       = gridPositions.enemies[eIdx];
+          const perpDist = perpDistToRay(ep.x, ep.y, attackerPos.x, attackerPos.y, targetEnemyPos.x, targetEnemyPos.y);
+          if (perpDist > weaponAccuracy) return;
+          const hitChance = Math.max(5, 50 - Math.floor(perpDist * 15));
+          if (d100() <= hitChance) {
+            scatterHits++;
+            const scatDmg   = rollDamageDice(activeWep.damage, char.stats.psyRating || 0);
+            const scatArmor = Math.max(0, (encounter.enemies[eIdx].armor || 0) - (activeWep.pen || 0));
+            const scatNet   = Math.max(1, scatDmg - scatArmor);
+            log.push({ type: "player", text: `  ↳ Rnd ${r + 1} scatter → ${encounter.enemies[eIdx].name}: ${scatDmg} − ${scatArmor} = ${scatNet} dmg` });
+            newEnemyWounds[eIdx] = Math.max(0, newEnemyWounds[eIdx] - scatNet);
+            if (newEnemyWounds[eIdx] <= 0) {
+              eventBridge.emit('combat-death', { targetType: 'enemy', targetIndex: eIdx });
+              log.push({ type: "player", text: `  ↳ ${encounter.enemies[eIdx].name} is DEFEATED by scatter fire!` });
+              if (newEnemyWounds.every(w2 => w2 <= 0)) allDefeated = true;
+            }
+          }
+        });
+      }
+    }
+
+    // ── Burst summary ─────────────────────────────────────────────
+    if (mode !== 'single') {
+      const missCount = rounds - totalHitsOnTarget;
+      log.push({ type: "player", text: `[Burst: ${totalHitsOnTarget} hit / ${missCount} miss${scatterHits > 0 ? `, ${scatterHits} scatter` : ''}]` });
+    }
+
+    // ── Reaction gate: enemy can dodge/parry the entire burst once ────────
+    if (totalHitsOnTarget > 0 && !allDefeated) {
+      let dodged = false;
+      if (enemyReactionsUsedRef.current[targetIdx]) {
+        log.push({ type: "enemy", text: `${target.name} has no reactions left — cannot dodge!` });
       } else {
-        log.push({ type: "enemy", text: `${target.name} fails to dodge (rolled ${dodgeRoll}/${dodgeTarget})` });
-        for (let h = 0; h < hitCount; h++) {
+        const dodgeRoll    = d100();
+        const dodgeTarget2 = target.stats.agility || 20;
+        dodged = dodgeRoll <= dodgeTarget2;
+        if (dodged) {
+          log.push({ type: "enemy", text: `${target.name} DODGES the burst! (AGI ${dodgeTarget2}: rolled ${dodgeRoll})` });
+        } else {
+          log.push({ type: "enemy", text: `${target.name} fails to dodge (rolled ${dodgeRoll}/${dodgeTarget2})` });
+        }
+        // Reaction spent regardless of success/failure
+        setEnemyReactionsUsed(prev => { const n = [...prev]; n[targetIdx] = true; return n; });
+        enemyReactionsUsedRef.current[targetIdx] = true;
+      }
+
+      if (!dodged) {
+        const firstLoc = hitLocation(firstHitRoll ?? roll);
+        for (let h = 0; h < totalHitsOnTarget; h++) {
           if (newEnemyWounds[targetIdx] <= 0) break;
-          const loc = subsequentHitLoc(firstLoc, h);
-          const rawDmg = rollDamageDice(activeWep.damage, char.stats.psyRating || 0);
+          const loc     = subsequentHitLoc(firstLoc, h);
+          const rawDmg  = rollDamageDice(activeWep.damage, char.stats.psyRating || 0);
           eventBridge.emit('combat-hit', { targetType: 'enemy', targetIndex: targetIdx });
           const effectiveArmor = Math.max(0, (target.armor || 0) - (activeWep.pen || 0));
           const finalDmg = Math.max(1, rawDmg - effectiveArmor);
-          const hitLabel = hitCount > 1 ? `Hit ${h + 1}: ` : '';
-          log.push({ type: "player", text: `${hitLabel}${loc}! ${rawDmg} dmg (${activeWep.damage}) − Armor ${effectiveArmor} = ${finalDmg}` });
+          const hitLabel = totalHitsOnTarget > 1 ? `Hit ${h + 1}: ` : '';
+          log.push({ type: "player", text: `${hitLabel}${loc}! ${rawDmg} dmg − Armor ${effectiveArmor} = ${finalDmg}` });
           newEnemyWounds[targetIdx] = Math.max(0, newEnemyWounds[targetIdx] - finalDmg);
           setEnemyBodyWounds(prev => {
             const upd = prev.map(bw => ({ ...bw }));
@@ -1492,11 +1630,13 @@ export default function MissionSystem({ onNavigate }) {
             break;
           }
         }
-        log.push({ type: "player", text: `${target.name}: ${Math.max(0, newEnemyWounds[targetIdx])}/${target.wounds} wounds remaining.` });
+        if (newEnemyWounds[targetIdx] > 0) {
+          log.push({ type: "player", text: `${target.name}: ${newEnemyWounds[targetIdx]}/${target.wounds} wounds remaining.` });
+        }
       }
-      setEnemyWounds(newEnemyWounds);
     }
 
+    setEnemyWounds(newEnemyWounds);
     setCombatLog(prevLog => [...prevLog, ...log]);
     setAiming(false);
     setFireMode('single');
@@ -1623,6 +1763,15 @@ export default function MissionSystem({ onNavigate }) {
     }
     
     console.log("advanceInitiative: currentTurn =", currentTurnIndex, "nextTurn =", nextTurn, "init.length =", init.length);
+
+    // Refresh the incoming actor's reaction for this turn
+    const incomingActor = init[nextTurn];
+    if (incomingActor?.type === 'party') {
+      setPartyReactionsUsed(prev => { const n = [...prev]; n[incomingActor.index] = false; return n; });
+    } else if (incomingActor?.type === 'enemy') {
+      setEnemyReactionsUsed(prev => { const n = [...prev]; n[incomingActor.index] = false; return n; });
+    }
+
     setCurrentTurn(nextTurn);
     setCombatAction('movement'); // Reset to movement phase for next actor
     setAiming(false);            // Clear any aim bonus from previous turn
@@ -1656,7 +1805,7 @@ export default function MissionSystem({ onNavigate }) {
     startMission();
   }
 
-  function playerAttack(attackType = 'standard') {
+  function playerAttack(attackType = 'standard', targetIdx = null) {
     const actor = initiativeOrder[currentTurn];
     if (!actor || actor.type !== 'party') return;
 
@@ -1693,24 +1842,30 @@ export default function MissionSystem({ onNavigate }) {
         const rawDmg = rollDamageDice('1d5', 0) + sb; // blunt improvised — 1d5+SB, pen 0
 
         let reactionBlocked = false;
-        const dodgeRoll = d100();
-        const dodgeTarget = impEnemy.stats.agility || 20;
-        if (dodgeRoll <= dodgeTarget) {
-          log.push({ type: "enemy", text: `${impEnemy.name} DODGES! (AGI ${dodgeTarget}: rolled ${dodgeRoll})` });
-          reactionBlocked = true;
+        if (enemyReactionsUsedRef.current[impIdx]) {
+          log.push({ type: "enemy", text: `${impEnemy.name} has no reactions left — cannot dodge!` });
         } else {
-          const canParry = (impEnemy.weapons || []).some(w => w.type === 'Melee');
-          if (canParry) {
-            const parryRoll = d100();
-            const parryTarget = impEnemy.stats.meleeSkill || 20;
-            if (parryRoll <= parryTarget) {
-              log.push({ type: "enemy", text: `${impEnemy.name} PARRIES! (MEL ${parryTarget}: rolled ${parryRoll})` });
-              reactionBlocked = true;
-            } else {
-              log.push({ type: "enemy", text: `${impEnemy.name} failed to react (dodge ${dodgeRoll}/${dodgeTarget}, parry ${parryRoll}/${parryTarget})` });
-            }
+          const dodgeRoll = d100();
+          const dodgeTarget = impEnemy.stats.agility || 20;
+          setEnemyReactionsUsed(prev => { const n = [...prev]; n[impIdx] = true; return n; });
+          enemyReactionsUsedRef.current[impIdx] = true;
+          if (dodgeRoll <= dodgeTarget) {
+            log.push({ type: "enemy", text: `${impEnemy.name} DODGES! (AGI ${dodgeTarget}: rolled ${dodgeRoll})` });
+            reactionBlocked = true;
           } else {
-            log.push({ type: "enemy", text: `${impEnemy.name} failed to dodge (rolled ${dodgeRoll}/${dodgeTarget})` });
+            const canParry = (impEnemy.weapons || []).some(w => w.type === 'Melee');
+            if (canParry) {
+              const parryRoll = d100();
+              const parryTarget = impEnemy.stats.meleeSkill || 20;
+              if (parryRoll <= parryTarget) {
+                log.push({ type: "enemy", text: `${impEnemy.name} PARRIES! (MEL ${parryTarget}: rolled ${parryRoll})` });
+                reactionBlocked = true;
+              } else {
+                log.push({ type: "enemy", text: `${impEnemy.name} failed to react (dodge ${dodgeRoll}/${dodgeTarget}, parry ${parryRoll}/${parryTarget})` });
+              }
+            } else {
+              log.push({ type: "enemy", text: `${impEnemy.name} failed to dodge (rolled ${dodgeRoll}/${dodgeTarget})` });
+            }
           }
         }
         if (!reactionBlocked) {
@@ -1757,7 +1912,10 @@ export default function MissionSystem({ onNavigate }) {
       return;
     }
 
-    const { index: enemyIdx, enemy } = adjacentEnemies[0];
+    const chosenTarget = targetIdx !== null
+      ? (adjacentEnemies.find(e => e.index === targetIdx) ?? adjacentEnemies[0])
+      : adjacentEnemies[0];
+    const { index: enemyIdx, enemy } = chosenTarget;
     // Use the readied weapon; fall back to first melee weapon if active is somehow ranged
     const activeWep = getActiveWeapon(char, actor.index, activeWeapons);
     const weapon = (activeWep?.type === 'Melee') ? activeWep : getCharMeleeWeapon(char);
@@ -1794,13 +1952,18 @@ export default function MissionSystem({ onNavigate }) {
       const sb     = getStrBonus(char.stats.strength || 20);
       const rawDmg = rollDamageDice(weapon.damage, char.stats.psyRating || 0) + sb;
 
-      // 5. Enemy Reaction: Dodge or Parry (skipped on All-Out Attack)
+      // 5. Enemy Reaction: Dodge or Parry (skipped on All-Out Attack or reaction used)
       let reactionBlocked = false;
       if (attackType === 'allout') {
         log.push({ type: "player", text: `All-Out Attack — enemy cannot react!` });
+      } else if (enemyReactionsUsedRef.current[enemyIdx]) {
+        log.push({ type: "enemy", text: `${enemy.name} has no reactions left — cannot dodge!` });
       } else {
         const dodgeRoll   = d100();
         const dodgeTarget = enemy.stats.agility || 20;
+        // Reaction spent regardless of success/failure
+        setEnemyReactionsUsed(prev => { const n = [...prev]; n[enemyIdx] = true; return n; });
+        enemyReactionsUsedRef.current[enemyIdx] = true;
         if (dodgeRoll <= dodgeTarget) {
           log.push({ type: "enemy", text: `${enemy.name} DODGES! (AGI ${dodgeTarget}: rolled ${dodgeRoll})` });
           reactionBlocked = true;
@@ -2002,28 +2165,37 @@ export default function MissionSystem({ onNavigate }) {
         const sb     = getStrBonus(enemy.stats.strength || 20);
         const rawDmg = rollDamageDice(eWeapon.damage) + sb;
 
-        // 5. Player Reaction: Dodge or Parry
+        // 5. Player Reaction: Dodge or Parry (gated by 1-per-turn limit)
         let reactionBlocked = false;
-        const dodgeRoll   = d100();
-        const dodgeTarget = target.stats.agility || 20;
-        if (dodgeRoll <= dodgeTarget) {
-          log.push({ type: "player", text: `${target.name} DODGES! (AGI ${dodgeTarget}: rolled ${dodgeRoll})` });
-          reactionBlocked = true;
+        if (partyReactionsUsedRef.current[nearestIdx]) {
+          log.push({ type: "player", text: `${target.name} has no reactions left — cannot dodge!` });
         } else {
-          // Parry if player has a melee weapon (equipment may be {id,name,desc} objects)
-          const hasMelee = (target.equipment || []).some(item => { const w = getWeaponById(itemId(item)); return w && w.type === 'Melee'; });
-          if (hasMelee) {
-            const parryBonus  = (target.equipment || []).some(item => itemId(item) === 'shield_arm') ? 10 : 0;
-            const parryRoll   = d100();
-            const parryTarget = Math.min(100, (target.stats.meleeSkill || 20) + parryBonus);
-            if (parryRoll <= parryTarget) {
-              log.push({ type: "player", text: `${target.name} PARRIES! (MEL ${parryTarget}${parryBonus ? ` [Shield+${parryBonus}]` : ''}: rolled ${parryRoll})` });
-              reactionBlocked = true;
-            } else {
-              log.push({ type: "player", text: `${target.name} failed to react (dodge ${dodgeRoll}/${dodgeTarget}, parry ${parryRoll}/${parryTarget})` });
-            }
+          const dodgeRoll   = d100();
+          const dodgeTarget = target.stats.agility || 20;
+          // Mark reaction used regardless of success/failure
+          const nr = [...partyReactionsUsedRef.current];
+          nr[nearestIdx] = true;
+          partyReactionsUsedRef.current = nr;
+          setPartyReactionsUsed(nr);
+          if (dodgeRoll <= dodgeTarget) {
+            log.push({ type: "player", text: `${target.name} DODGES! (AGI ${dodgeTarget}: rolled ${dodgeRoll})` });
+            reactionBlocked = true;
           } else {
-            log.push({ type: "player", text: `${target.name} failed to dodge (rolled ${dodgeRoll}/${dodgeTarget})` });
+            // Parry if player has a melee weapon (equipment may be {id,name,desc} objects)
+            const hasMelee = (target.equipment || []).some(item => { const w = getWeaponById(itemId(item)); return w && w.type === 'Melee'; });
+            if (hasMelee) {
+              const parryBonus  = (target.equipment || []).some(item => itemId(item) === 'shield_arm') ? 10 : 0;
+              const parryRoll   = d100();
+              const parryTarget = Math.min(100, (target.stats.meleeSkill || 20) + parryBonus);
+              if (parryRoll <= parryTarget) {
+                log.push({ type: "player", text: `${target.name} PARRIES! (MEL ${parryTarget}${parryBonus ? ` [Shield+${parryBonus}]` : ''}: rolled ${parryRoll})` });
+                reactionBlocked = true;
+              } else {
+                log.push({ type: "player", text: `${target.name} failed to react (dodge ${dodgeRoll}/${dodgeTarget}, parry ${parryRoll}/${parryTarget})` });
+              }
+            } else {
+              log.push({ type: "player", text: `${target.name} failed to dodge (rolled ${dodgeRoll}/${dodgeTarget})` });
+            }
           }
         }
 
@@ -2139,6 +2311,8 @@ export default function MissionSystem({ onNavigate }) {
     setShootingMode(false);
     setActiveWeapons({});
     setEnemyPinned([]);
+    setPartyReactionsUsed([]);
+    setEnemyReactionsUsed([]);
     setRemainingAction('full');
     setFireMode('single');
     setCurrentEnemy(0);

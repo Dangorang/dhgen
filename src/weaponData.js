@@ -43,6 +43,7 @@ export const WEAPONS = [
     availability: WEAPON_AVAILABILITY.COMMON,
     description: "The standard sidearm of the Imperial Guard and a reliable weapon for any Acolyte. Compact and easy to maintain.",
     specialRules: ["Reliable", "UB"],
+    accuracy: 15,
     cost: 15,
   },
   {
@@ -60,6 +61,7 @@ export const WEAPONS = [
     availability: WEAPON_AVAILABILITY.COMMON,
     description: "The most common weapon in the Imperium. Reliable, cheap, and deadly in volume.",
     specialRules: ["Reliable", "UB"],
+    accuracy: 15,
     cost: 25,
   },
   {
@@ -77,6 +79,7 @@ export const WEAPONS = [
     availability: WEAPON_AVAILABILITY.RARE,
     description: "A heavy pistol that fires explosive bolts the size of a man's thumb. Favored by Space Marines and high-ranking officers.",
     specialRules: ["Explosive", "Tearing"],
+    accuracy: 20,
     cost: 150,
   },
   {
@@ -94,6 +97,7 @@ export const WEAPONS = [
     availability: WEAPON_AVAILABILITY.UNCOMMON,
     description: "A knife with a chain-blade edge. The teeth rip through flesh with horrible efficiency.",
     specialRules: ["Tearing"],
+    accuracy: 0,
     cost: 30,
   },
   {
@@ -111,6 +115,7 @@ export const WEAPONS = [
     availability: WEAPON_AVAILABILITY.VERY_RARE,
     description: "A blade whose edge crackles with power fields. Even a graze can be fatal.",
     specialRules: ["Power Field", "Balanced"],
+    accuracy: 0,
     cost: 500,
   },
   {
@@ -128,6 +133,7 @@ export const WEAPONS = [
     availability: WEAPON_AVAILABILITY.RARE,
     description: "Fires superheated plasma in controlled bursts. Dangerous but devastating.",
     specialRules: ["Overheat", "Melta"],
+    accuracy: 0,
     cost: 250,
   },
   {
@@ -145,6 +151,7 @@ export const WEAPONS = [
     availability: WEAPON_AVAILABILITY.RARE,
     description: "Sprays burning promethium in a cone. Terrifying and effective against groups.",
     specialRules: ["Flamer", "Spray"],
+    accuracy: 0,
     cost: 200,
   },
   {
@@ -162,6 +169,7 @@ export const WEAPONS = [
     availability: WEAPON_AVAILABILITY.COMMON,
     description: "A solid, reliable autogun. Nothing special but gets the job done.",
     specialRules: ["UB"],
+    accuracy: 15,
     cost: 20,
   },
 ];
@@ -183,6 +191,7 @@ WEAPONS.push(
     availability: WEAPON_AVAILABILITY.RARE,
     description: "An energy-field blade that treats armor as a suggestion. Standard issue to all Battalion operatives.",
     specialRules: ["Power Field", "Balanced"],
+    accuracy: 0,
     cost: 400,
   },
   {
@@ -200,6 +209,7 @@ WEAPONS.push(
     availability: WEAPON_AVAILABILITY.COMMON,
     description: "Standard-issue infantry rifle. Semi-auto and full-auto capable, robust under battlefield conditions.",
     specialRules: ["Reliable", "UB"],
+    accuracy: 10,
     cost: 75,
   },
   {
@@ -217,6 +227,7 @@ WEAPONS.push(
     availability: WEAPON_AVAILABILITY.UNCOMMON,
     description: "Belt-fed suppression weapon. Lays down curtains of fire to pin and destroy enemy formations.",
     specialRules: ["Spray", "Bipod"],
+    accuracy: 30,
     cost: 200,
   },
   {
@@ -234,6 +245,7 @@ WEAPONS.push(
     availability: WEAPON_AVAILABILITY.UNCOMMON,
     description: "Integrated forearm shield with a reinforced striking edge. Grants +10 to parry rolls.",
     specialRules: ["Defensive (+10 Parry)", "Shocking"],
+    accuracy: 0,
     cost: 150,
   },
   {
@@ -251,6 +263,7 @@ WEAPONS.push(
     availability: WEAPON_AVAILABILITY.ARCANE,
     description: "A masterpiece of psychic-engineering that treats physics as suggestions. Damage scales directly with the wielder's Psy Rating. Ignores mundane cover.",
     specialRules: ["Psychic-Powered", "Ignores Cover", "No Ammo"],
+    accuracy: 0,
     cost: 0,
   }
 );
