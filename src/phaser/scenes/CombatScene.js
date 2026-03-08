@@ -26,6 +26,7 @@ export default class CombatScene extends Phaser.Scene {
     this._updateHandler     = null;
     this._hitHandler        = null;
     this._deathHandler      = null;
+    this._shotHandler       = null; // ranged shot animation
   }
 
   // ── Lifecycle ────────────────────────────────────────────────
@@ -37,9 +38,11 @@ export default class CombatScene extends Phaser.Scene {
     this._hitHandler    = (data) => this._onCombatHit(data);
     this._deathHandler  = (data) => this._onCombatDeath(data);
 
-    eventBridge.on('update-grid', this._updateHandler);
-    eventBridge.on('combat-hit',  this._hitHandler);
+    eventBridge.on('update-grid',  this._updateHandler);
+    eventBridge.on('combat-hit',   this._hitHandler);
     eventBridge.on('combat-death', this._deathHandler);
+    this._shotHandler = (data) => this._animateShot(data);
+    eventBridge.on('combat-shot',  this._shotHandler);
 
     // Pointer input → forward grid clicks to React
     this.input.on('pointerdown', (pointer) => {
@@ -56,9 +59,10 @@ export default class CombatScene extends Phaser.Scene {
 
   shutdown() {
     // Remove all event listeners when scene shuts down
-    if (this._updateHandler) eventBridge.off('update-grid', this._updateHandler);
-    if (this._hitHandler)    eventBridge.off('combat-hit',  this._hitHandler);
+    if (this._updateHandler) eventBridge.off('update-grid',  this._updateHandler);
+    if (this._hitHandler)    eventBridge.off('combat-hit',   this._hitHandler);
     if (this._deathHandler)  eventBridge.off('combat-death', this._deathHandler);
+    if (this._shotHandler)   eventBridge.off('combat-shot',  this._shotHandler);
   }
 
   // ── Grid Background ──────────────────────────────────────────
@@ -367,6 +371,75 @@ export default class CombatScene extends Phaser.Scene {
         duration: Phaser.Math.Between(250, 500),
         ease: 'Power2',
         onComplete: () => p.destroy(),
+      });
+    }
+  }
+
+  // ── Ranged Shot Animation ─────────────────────────────────────
+  _animateShot({ fromPos, toPos, count, isHit, weaponClass }) {
+    if (!this.sys?.isActive() || !fromPos || !toPos) return;
+
+    // Weapon class → tracer colour
+    const COLOR_MAP = {
+      'Las':              0x00eeff,
+      'Solid Projectile': 0xffdd44,
+      'Plasma':           0x8844ff,
+      'Bolter':           0xff5500,
+      'Flamer':           0xff2200,
+      'Psychic':          0xee44ff,
+      'Phase':            0x44ffee,
+      'Power':            0x4488ff,
+      'Chain':            0xffaa44,
+      'Mechadendrite':    0x88ff44,
+    };
+    const projColor = COLOR_MAP[weaponClass] || 0xffdd44;
+
+    const fx = fromPos.x * TILE_SIZE + TILE_SIZE / 2;
+    const fy = fromPos.y * TILE_SIZE + TILE_SIZE / 2;
+    const tx = toPos.x  * TILE_SIZE + TILE_SIZE / 2;
+    const ty = toPos.y  * TILE_SIZE + TILE_SIZE / 2;
+
+    // count=0 = jam/misfire: muzzle flash fires but no projectiles leave the barrel
+    // cap at 12 so a full-auto LMG burst is visually distinct but not a performance hit
+    const shotCount = count > 0 ? Math.min(count, 12) : 0;
+
+    // Muzzle flash at shooter origin (always fires — even on jam)
+    const muzzle = this.add.rectangle(fx, fy, 12, 12, projColor, 1).setDepth(2);
+    this.tweens.add({
+      targets: muzzle, scaleX: 2.5, scaleY: 2.5, alpha: 0,
+      duration: 80, ease: 'Power2',
+      onComplete: () => muzzle.destroy(),
+    });
+
+    // Staggered projectiles
+    for (let i = 0; i < shotCount; i++) {
+      this.time.delayedCall(i * 55, () => {
+        if (!this.sys?.isActive()) return;
+
+        // Slight spread for burst shots
+        const ox = shotCount > 1 ? Phaser.Math.FloatBetween(-5, 5) : 0;
+        const oy = shotCount > 1 ? Phaser.Math.FloatBetween(-5, 5) : 0;
+
+        const proj = this.add.rectangle(fx, fy, 4, 4, projColor, 1).setDepth(2);
+        this.tweens.add({
+          targets: proj,
+          x: tx + ox, y: ty + oy,
+          duration: 100,
+          ease: 'Linear',
+          onComplete: () => {
+            proj.destroy();
+            // Impact flash on first projectile when hit
+            if (isHit && i === 0) {
+              const flash = this.add.rectangle(tx, ty, TILE_SIZE, TILE_SIZE, projColor, 0.65).setDepth(2);
+              this.tweens.add({
+                targets: flash, alpha: 0, scaleX: 1.6, scaleY: 1.6,
+                duration: 160, ease: 'Power2',
+                onComplete: () => flash.destroy(),
+              });
+              this._spawnHitParticles(tx, ty, projColor, 5);
+            }
+          },
+        });
       });
     }
   }
