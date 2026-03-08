@@ -628,50 +628,107 @@ export default function MissionSystem({ onNavigate }) {
           )}
         </div>
         
-        {/* Party Status — click for detail popup */}
-        <div style={{ border: "1px solid #3a2510", background: "rgba(15,10,4,0.85)", padding: "10px 14px", marginBottom: 12 }}>
-          <div style={{ fontFamily: "'Cinzel', serif", fontSize: 10, color: "#6a5030", letterSpacing: 2, marginBottom: 8 }}>PARTY STATUS <span style={{ color: "#3a2808", fontSize: 9 }}>(click for details)</span></div>
-          <div style={{ display: "flex", flexDirection: "column", gap: 5 }}>
-            {party.map((p, i) => {
-              const wounds = partyWounds[i] || 0;
-              const maxW = p.wounds || 10;
-              const alive = wounds < maxW;
-              const hp = Math.max(0, maxW - wounds);
-              const hpPct = hp / maxW;
-              const isActiveTurn = initiativeOrder[currentTurn]?.type === 'party' && initiativeOrder[currentTurn]?.index === i;
-              const barColor = hpPct > 0.5 ? '#6ee7b7' : hpPct > 0.25 ? '#f59e0b' : '#f87171';
-              const aw = getActiveWeapon(p, i, activeWeapons);
-              const wepIsRanged = aw && aw.type !== 'Melee';
-              return (
-                <div key={i}
-                  onClick={() => alive && setDetailPopup({ type: 'party', index: i })}
-                  style={{ cursor: alive ? 'pointer' : 'default', padding: '5px 8px', border: isActiveTurn ? '1px solid #c09040' : '1px solid #2a1808', background: isActiveTurn ? 'rgba(60,45,10,0.2)' : 'rgba(10,8,4,0.4)', transition: 'border-color 0.2s', opacity: alive ? 1 : 0.5 }}
-                  onMouseEnter={e => { if (alive) e.currentTarget.style.borderColor = '#6a5030'; }}
-                  onMouseLeave={e => { e.currentTarget.style.borderColor = isActiveTurn ? '#c09040' : '#2a1808'; }}>
-                  {/* Single-row layout: name | health bar+hp | weapon */}
-                  <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
-                    <span style={{ fontFamily: "'Cinzel', serif", fontSize: 10, color: alive ? (isActiveTurn ? '#c09040' : '#a89070') : '#604040', flex: 1, minWidth: 0, overflow: 'hidden', whiteSpace: 'nowrap', textOverflow: 'ellipsis' }}>
-                      {isActiveTurn ? '▶ ' : ''}{p.name}
-                    </span>
-                    {alive ? (
-                      <div style={{ display: 'flex', alignItems: 'center', gap: 4, flexShrink: 0 }}>
-                        <div style={{ background: '#1a1a14', height: 5, borderRadius: 2, width: 60 }}>
-                          <div style={{ background: barColor, width: `${hpPct * 100}%`, height: '100%', borderRadius: 2, transition: 'width 0.3s' }} />
+        {/* ── Combined Status Row: Party (left) + Hostiles (right) ── */}
+        <div style={{ display: "flex", gap: 8, marginBottom: 12 }}>
+
+          {/* Party Status */}
+          <div style={{ flex: 1, border: "1px solid #3a2510", background: "rgba(15,10,4,0.85)", padding: "8px 10px" }}>
+            <div style={{ fontFamily: "'Cinzel', serif", fontSize: 9, color: "#6a5030", letterSpacing: 2, marginBottom: 6 }}>
+              PARTY <span style={{ color: "#3a2808", fontFamily: "'IM Fell English', serif", letterSpacing: 0 }}>(click)</span>
+            </div>
+            <div style={{ display: "flex", flexDirection: "column", gap: 4 }}>
+              {party.map((p, i) => {
+                const wounds = partyWounds[i] || 0;
+                const maxW = p.wounds || 10;
+                const alive = wounds < maxW;
+                const hp = Math.max(0, maxW - wounds);
+                const hpPct = hp / maxW;
+                const isActiveTurn = initiativeOrder[currentTurn]?.type === 'party' && initiativeOrder[currentTurn]?.index === i;
+                const barColor = hpPct > 0.5 ? '#6ee7b7' : hpPct > 0.25 ? '#f59e0b' : '#f87171';
+                const aw = getActiveWeapon(p, i, activeWeapons);
+                const wepIsRanged = aw && aw.type !== 'Melee';
+                return (
+                  <div key={i}
+                    onClick={() => alive && setDetailPopup({ type: 'party', index: i })}
+                    style={{ cursor: alive ? 'pointer' : 'default', padding: '4px 6px', border: isActiveTurn ? '1px solid #c09040' : '1px solid #2a1808', background: isActiveTurn ? 'rgba(60,45,10,0.2)' : 'rgba(10,8,4,0.4)', opacity: alive ? 1 : 0.5 }}
+                    onMouseEnter={e => { if (alive) e.currentTarget.style.borderColor = '#6a5030'; }}
+                    onMouseLeave={e => { e.currentTarget.style.borderColor = isActiveTurn ? '#c09040' : '#2a1808'; }}>
+                    {/* Row: name | bar+hp | weapon */}
+                    <div style={{ display: 'flex', alignItems: 'center', gap: 5 }}>
+                      <span style={{ fontFamily: "'Cinzel', serif", fontSize: 9, color: alive ? (isActiveTurn ? '#c09040' : '#a89070') : '#604040', flex: 1, minWidth: 0, overflow: 'hidden', whiteSpace: 'nowrap', textOverflow: 'ellipsis' }}>
+                        {isActiveTurn ? '▶ ' : ''}{p.name}
+                      </span>
+                      {alive ? (
+                        <div style={{ display: 'flex', alignItems: 'center', gap: 3, flexShrink: 0 }}>
+                          <div style={{ background: '#1a1a14', height: 4, borderRadius: 2, width: 44 }}>
+                            <div style={{ background: barColor, width: `${hpPct * 100}%`, height: '100%', borderRadius: 2, transition: 'width 0.3s' }} />
+                          </div>
+                          <span style={{ fontFamily: "'IM Fell English', serif", fontSize: 8, color: '#6a7a5a', whiteSpace: 'nowrap' }}>{hp}/{maxW}</span>
                         </div>
-                        <span style={{ fontFamily: "'IM Fell English', serif", fontSize: 9, color: '#6a7a5a', whiteSpace: 'nowrap' }}>{hp}/{maxW}</span>
-                      </div>
-                    ) : (
-                      <span style={{ fontFamily: "'IM Fell English', serif", fontSize: 9, color: '#604040', flexShrink: 0 }}>FALLEN</span>
-                    )}
-                    {/* Weapon indicator */}
-                    <span style={{ fontFamily: "'IM Fell English', serif", fontSize: 9, color: wepIsRanged ? '#60aadd' : '#c09050', whiteSpace: 'nowrap', flexShrink: 0, borderLeft: '1px solid #2a1808', paddingLeft: 5 }}>
-                      {wepIsRanged ? '🔫' : '⚔'} {(aw?.name || 'Fists').substring(0, 12)}
-                    </span>
+                      ) : (
+                        <span style={{ fontFamily: "'IM Fell English', serif", fontSize: 8, color: '#604040', flexShrink: 0 }}>FALLEN</span>
+                      )}
+                    </div>
+                    {/* Weapon row */}
+                    <div style={{ marginTop: 2, fontFamily: "'IM Fell English', serif", fontSize: 8, color: wepIsRanged ? '#4a8aaa' : '#906040' }}>
+                      {wepIsRanged ? '🔫' : '⚔'} {(aw?.name || 'Fists').substring(0, 14)}
+                    </div>
                   </div>
-                </div>
-              );
-            })}
+                );
+              })}
+            </div>
           </div>
+
+          {/* Hostiles Status */}
+          <div style={{ flex: 1, border: "1px solid #3a1a1a", background: "rgba(15,6,6,0.9)", padding: "8px 10px" }}>
+            <div style={{ fontFamily: "'Cinzel', serif", fontSize: 9, color: "#6a2020", letterSpacing: 2, marginBottom: 6 }}>
+              HOSTILES <span style={{ color: "#3a1010", fontFamily: "'IM Fell English', serif", letterSpacing: 0 }}>(click)</span>
+            </div>
+            <div style={{ display: "flex", flexDirection: "column", gap: 4 }}>
+              {encounter?.enemies.map((enemy, i) => {
+                const w = enemyWounds[i] || 0;
+                const maxW = enemy.wounds || 10;
+                const alive = w > 0;
+                const wPct = w / maxW;
+                const isActiveTurn = initiativeOrder[currentTurn]?.type === 'enemy' && initiativeOrder[currentTurn]?.index === i;
+                const barColor = wPct > 0.6 ? '#f87171' : wPct > 0.3 ? '#f59e0b' : '#c04040';
+                // Primary weapon for display
+                const eWep = (enemy.weapons || [])[0];
+                const eWepIsRanged = eWep && eWep.type !== 'Melee';
+                return (
+                  <div key={i}
+                    onClick={() => alive && setDetailPopup({ type: 'enemy', index: i })}
+                    style={{ cursor: alive ? 'pointer' : 'default', padding: '4px 6px', border: isActiveTurn ? '1px solid #c09040' : '1px solid #2a1010', background: isActiveTurn ? 'rgba(60,20,10,0.2)' : 'rgba(10,4,4,0.4)', opacity: alive ? 1 : 0.4 }}
+                    onMouseEnter={e => { if (alive) e.currentTarget.style.borderColor = '#7a3030'; }}
+                    onMouseLeave={e => { e.currentTarget.style.borderColor = isActiveTurn ? '#c09040' : '#2a1010'; }}>
+                    {/* Row: name | bar+hp */}
+                    <div style={{ display: 'flex', alignItems: 'center', gap: 5 }}>
+                      <span style={{ fontFamily: "'Cinzel', serif", fontSize: 9, color: alive ? (isActiveTurn ? '#c09040' : '#c05050') : '#504030', flex: 1, minWidth: 0, overflow: 'hidden', whiteSpace: 'nowrap', textOverflow: 'ellipsis' }}>
+                        {isActiveTurn ? '▶ ' : ''}{enemy.name}{!alive ? ' ✝' : ''}
+                      </span>
+                      {alive ? (
+                        <div style={{ display: 'flex', alignItems: 'center', gap: 3, flexShrink: 0 }}>
+                          <div style={{ background: '#1a1414', height: 4, borderRadius: 2, width: 44 }}>
+                            <div style={{ background: barColor, width: `${wPct * 100}%`, height: '100%', borderRadius: 2, transition: 'width 0.3s' }} />
+                          </div>
+                          <span style={{ fontFamily: "'IM Fell English', serif", fontSize: 8, color: '#8a4040', whiteSpace: 'nowrap' }}>{w}/{maxW}</span>
+                        </div>
+                      ) : (
+                        <span style={{ fontFamily: "'IM Fell English', serif", fontSize: 8, color: '#504030', flexShrink: 0 }}>KIA</span>
+                      )}
+                    </div>
+                    {/* Weapon row */}
+                    {eWep && (
+                      <div style={{ marginTop: 2, fontFamily: "'IM Fell English', serif", fontSize: 8, color: eWepIsRanged ? '#4a6a8a' : '#7a3030' }}>
+                        {eWepIsRanged ? '🔫' : '⚔'} {eWep.name.substring(0, 14)}
+                      </div>
+                    )}
+                  </div>
+                );
+              })}
+            </div>
+          </div>
+
         </div>
         
         
@@ -688,42 +745,6 @@ export default function MissionSystem({ onNavigate }) {
             <span><span style={{ color: "#5aba5a" }}>■</span> Party</span>
             <span><span style={{ color: "#fa5a5a" }}>■</span> Enemies</span>
             <span style={{ color: "#4a3a20" }}>Click to move · Active unit pulses</span>
-          </div>
-        </div>
-
-        {/* All Enemies Status — click for detail popup */}
-        <div style={{ border: "1px solid #3a1a1a", background: "rgba(15,6,6,0.9)", padding: "10px 14px", marginBottom: 12 }}>
-          <div style={{ fontFamily: "'Cinzel', serif", fontSize: 10, color: "#6a2020", letterSpacing: 2, marginBottom: 8 }}>HOSTILES <span style={{ color: "#3a1010", fontSize: 9 }}>(click for details)</span></div>
-          <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
-            {encounter?.enemies.map((enemy, i) => {
-              const w = enemyWounds[i] || 0;
-              const maxW = enemy.wounds || 10;
-              const alive = w > 0;
-              const wPct = w / maxW;
-              const isActiveTurn = initiativeOrder[currentTurn]?.type === 'enemy' && initiativeOrder[currentTurn]?.index === i;
-              const barColor = wPct > 0.6 ? '#f87171' : wPct > 0.3 ? '#f59e0b' : '#c04040';
-              return (
-                <div key={i}
-                  onClick={() => alive && setDetailPopup({ type: 'enemy', index: i })}
-                  style={{ cursor: alive ? 'pointer' : 'default', padding: '6px 8px', border: isActiveTurn ? '1px solid #c09040' : '1px solid #2a1010', background: isActiveTurn ? 'rgba(60,20,10,0.2)' : 'rgba(10,4,4,0.4)', opacity: alive ? 1 : 0.4, transition: 'border-color 0.2s' }}
-                  onMouseEnter={e => { if (alive) e.currentTarget.style.borderColor = '#7a3030'; }}
-                  onMouseLeave={e => { e.currentTarget.style.borderColor = isActiveTurn ? '#c09040' : '#2a1010'; }}>
-                  <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 4 }}>
-                    <span style={{ fontFamily: "'Cinzel', serif", fontSize: 11, color: alive ? (isActiveTurn ? '#c09040' : '#c05050') : '#504030' }}>
-                      {isActiveTurn ? '▶ ' : ''}{enemy.name}{!alive ? ' [KIA]' : ''}
-                    </span>
-                    <span style={{ fontFamily: "'IM Fell English', serif", fontSize: 10, color: alive ? '#8a4040' : '#504030' }}>
-                      {alive ? `${w} / ${maxW} W` : 'KIA'}
-                    </span>
-                  </div>
-                  {alive && (
-                    <div style={{ background: '#1a1414', height: 5, borderRadius: 2 }}>
-                      <div style={{ background: barColor, width: `${wPct * 100}%`, height: '100%', borderRadius: 2, transition: 'width 0.3s' }} />
-                    </div>
-                  )}
-                </div>
-              );
-            })}
           </div>
         </div>
 
