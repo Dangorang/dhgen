@@ -1,4 +1,4 @@
-import { useEffect, useRef } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import Phaser from 'phaser';
 import CombatScene from './scenes/CombatScene.js';
 import { eventBridge } from './EventBridge.js';
@@ -15,10 +15,11 @@ const CANVAS_W = 600;
 const CANVAS_H = 600;
 
 export default function PhaserGame({ gridState, onGridClick }) {
-  const containerRef = useRef(null);
-  const gameRef      = useRef(null);
-  const readyRef     = useRef(false);
-  const pendingRef   = useRef(null); // holds gridState emitted before scene was ready
+  const containerRef  = useRef(null);
+  const gameRef       = useRef(null);
+  // phaserReady is React state so that when phaser-ready fires it causes a
+  // re-render, which then reliably fires the gridState effect with the scene ready.
+  const [phaserReady, setPhaserReady] = useState(false);
 
   // ── Mount / unmount Phaser ───────────────────────────────────
   useEffect(() => {
@@ -36,25 +37,17 @@ export default function PhaserGame({ gridState, onGridClick }) {
         mode: Phaser.Scale.FIT,
         autoCenter: Phaser.Scale.CENTER_BOTH,
       },
-      // Disable Phaser's default banner spam
       banner: false,
     };
 
     gameRef.current = new Phaser.Game(config);
 
-    // Listen for scene ready → flush any pending grid state
-    const onReady = () => {
-      readyRef.current = true;
-      if (pendingRef.current) {
-        eventBridge.emit('update-grid', pendingRef.current);
-        pendingRef.current = null;
-      }
-    };
+    const onReady = () => setPhaserReady(true);
     eventBridge.on('phaser-ready', onReady);
 
     return () => {
       eventBridge.off('phaser-ready', onReady);
-      readyRef.current = false;
+      setPhaserReady(false);
       if (gameRef.current) {
         gameRef.current.destroy(true);
         gameRef.current = null;
@@ -70,15 +63,13 @@ export default function PhaserGame({ gridState, onGridClick }) {
   }, [onGridClick]);
 
   // ── Push grid state into Phaser whenever React state changes ─
+  // Depends on phaserReady so it re-fires the moment the scene signals ready,
+  // guaranteeing sprites are drawn even when the player goes first (no other
+  // state change would otherwise trigger the first update-grid emission).
   useEffect(() => {
-    if (!gridState) return;
-    if (readyRef.current) {
-      eventBridge.emit('update-grid', gridState);
-    } else {
-      // Cache for emission once scene is ready
-      pendingRef.current = gridState;
-    }
-  }, [gridState]);
+    if (!phaserReady || !gridState) return;
+    eventBridge.emit('update-grid', gridState);
+  }, [phaserReady, gridState]);
 
   return (
     <div

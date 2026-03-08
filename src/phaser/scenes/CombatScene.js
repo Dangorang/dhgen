@@ -19,11 +19,13 @@ const GRID_SIZE = 20;
 export default class CombatScene extends Phaser.Scene {
   constructor() {
     super({ key: 'CombatScene' });
-    this.partySprites  = [];
-    this.enemySprites  = [];
-    this._updateHandler = null;
-    this._hitHandler    = null;
-    this._deathHandler  = null;
+    this.partySprites       = [];
+    this.enemySprites       = [];
+    this._highlightGfx      = null; // movement range overlay
+    this._shootingGfx       = null; // shooting target overlay
+    this._updateHandler     = null;
+    this._hitHandler        = null;
+    this._deathHandler      = null;
   }
 
   // ── Lifecycle ────────────────────────────────────────────────
@@ -77,7 +79,7 @@ export default class CombatScene extends Phaser.Scene {
 
   // ── Grid State Update (from React) ──────────────────────────
   _onUpdateGrid(data) {
-    if (!data) return;
+    if (!this.sys?.game || !data) return;
     const {
       gridPositions,
       partyWounds,
@@ -88,8 +90,62 @@ export default class CombatScene extends Phaser.Scene {
       enemies,
     } = data;
 
+    this._drawMovementRange(data.movementHighlight);
+    this._drawShootingTargets(data.shootingMode, gridPositions?.enemies, enemyWounds);
     if (gridPositions?.party)   this._updatePartySprites(gridPositions.party,   partyWounds,  currentTurn, initiativeOrder, party);
     if (gridPositions?.enemies) this._updateEnemySprites(gridPositions.enemies, enemyWounds,  currentTurn, initiativeOrder, enemies);
+  }
+
+  // ── Shooting Target Highlight ──────────────────────────────────
+  _drawShootingTargets(shootingMode, enemyPositions, enemyWounds) {
+    if (!this._shootingGfx) {
+      this._shootingGfx = this.add.graphics();
+      this._shootingGfx.setDepth(0.6); // above movement highlight, below sprites
+    }
+    this._shootingGfx.clear();
+    if (!shootingMode || !enemyPositions) return;
+
+    this._shootingGfx.fillStyle(0xff6600, 0.22);
+    this._shootingGfx.lineStyle(2, 0xff8800, 0.75);
+
+    enemyPositions.forEach((pos, i) => {
+      if ((enemyWounds?.[i] || 0) > 0) {
+        const px = pos.x * TILE_SIZE;
+        const py = pos.y * TILE_SIZE;
+        this._shootingGfx.fillRect(px + 1, py + 1, TILE_SIZE - 2, TILE_SIZE - 2);
+        this._shootingGfx.strokeRect(px + 1, py + 1, TILE_SIZE - 2, TILE_SIZE - 2);
+      }
+    });
+  }
+
+  // ── Movement Range Highlight ──────────────────────────────────
+  _drawMovementRange(highlight) {
+    // Always clear previous highlights first
+    if (this._highlightGfx) {
+      this._highlightGfx.clear();
+    } else {
+      this._highlightGfx = this.add.graphics();
+      // Draw below sprites but above grid — set depth between grid (0) and sprites (1)
+      this._highlightGfx.setDepth(0.5);
+    }
+
+    if (!highlight) return;
+
+    const { actorPos, range } = highlight;
+    this._highlightGfx.fillStyle(0x336633, 0.28);
+    this._highlightGfx.lineStyle(1, 0x55aa55, 0.45);
+
+    for (let y = 0; y < GRID_SIZE; y++) {
+      for (let x = 0; x < GRID_SIZE; x++) {
+        const dist = Math.abs(x - actorPos.x) + Math.abs(y - actorPos.y);
+        if (dist > 0 && dist <= range) {
+          const px = x * TILE_SIZE;
+          const py = y * TILE_SIZE;
+          this._highlightGfx.fillRect(px + 1, py + 1, TILE_SIZE - 2, TILE_SIZE - 2);
+          this._highlightGfx.strokeRect(px + 1, py + 1, TILE_SIZE - 2, TILE_SIZE - 2);
+        }
+      }
+    }
   }
 
   // ── Party Sprites ────────────────────────────────────────────
@@ -130,7 +186,7 @@ export default class CombatScene extends Phaser.Scene {
 
       // Update visual state
       const sp = this.partySprites[i];
-      if (!sp) return;
+      if (!sp || !sp.rect?.active || !sp.txt?.active) return;
 
       if (isDead) {
         sp.rect.setFillStyle(0x1a1a1a);
@@ -201,7 +257,7 @@ export default class CombatScene extends Phaser.Scene {
       }
 
       const sp = this.enemySprites[i];
-      if (!sp) return;
+      if (!sp || !sp.rect?.active || !sp.txt?.active) return;
 
       if (isDead) {
         if (sp._pulseTween) { sp._pulseTween.stop(); sp._pulseTween = null; }
@@ -239,6 +295,7 @@ export default class CombatScene extends Phaser.Scene {
 
   // ── Combat FX ────────────────────────────────────────────────
   _onCombatHit({ targetType, targetIndex }) {
+    if (!this.sys?.isActive()) return;
     const sp = targetType === 'party'
       ? this.partySprites[targetIndex]
       : this.enemySprites[targetIndex];
@@ -269,6 +326,7 @@ export default class CombatScene extends Phaser.Scene {
   }
 
   _onCombatDeath({ targetType, targetIndex }) {
+    if (!this.sys?.isActive()) return;
     const sp = targetType === 'party'
       ? this.partySprites[targetIndex]
       : this.enemySprites[targetIndex];
