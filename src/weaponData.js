@@ -43,7 +43,7 @@ export const WEAPONS = [
     availability: WEAPON_AVAILABILITY.COMMON,
     description: "The standard sidearm of the Imperial Guard and a reliable weapon for any Acolyte. Compact and easy to maintain.",
     specialRules: ["Reliable", "UB"],
-    accuracy: 15,
+    accuracy: 2,
     cost: 15,
   },
   {
@@ -61,7 +61,7 @@ export const WEAPONS = [
     availability: WEAPON_AVAILABILITY.COMMON,
     description: "The most common weapon in the Imperium. Reliable, cheap, and deadly in volume.",
     specialRules: ["Reliable", "UB"],
-    accuracy: 15,
+    accuracy: 3,
     cost: 25,
   },
   {
@@ -79,7 +79,7 @@ export const WEAPONS = [
     availability: WEAPON_AVAILABILITY.RARE,
     description: "A heavy pistol that fires explosive bolts the size of a man's thumb. Favored by Space Marines and high-ranking officers.",
     specialRules: ["Explosive", "Tearing"],
-    accuracy: 20,
+    accuracy: 3,
     cost: 150,
   },
   {
@@ -169,7 +169,7 @@ export const WEAPONS = [
     availability: WEAPON_AVAILABILITY.COMMON,
     description: "A solid, reliable autogun. Nothing special but gets the job done.",
     specialRules: ["UB"],
-    accuracy: 15,
+    accuracy: 4,
     cost: 20,
   },
 ];
@@ -209,7 +209,7 @@ WEAPONS.push(
     availability: WEAPON_AVAILABILITY.COMMON,
     description: "Standard-issue infantry rifle. Semi-auto and full-auto capable, robust under battlefield conditions.",
     specialRules: ["Reliable", "UB"],
-    accuracy: 10,
+    accuracy: 5,
     cost: 75,
   },
   {
@@ -227,7 +227,7 @@ WEAPONS.push(
     availability: WEAPON_AVAILABILITY.UNCOMMON,
     description: "Belt-fed suppression weapon. Lays down curtains of fire to pin and destroy enemy formations.",
     specialRules: ["Spray", "Bipod"],
-    accuracy: 30,
+    accuracy: 10,
     cost: 200,
   },
   {

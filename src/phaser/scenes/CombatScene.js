@@ -19,14 +19,18 @@ const GRID_SIZE = 20;
 export default class CombatScene extends Phaser.Scene {
   constructor() {
     super({ key: 'CombatScene' });
-    this.partySprites       = [];
-    this.enemySprites       = [];
-    this._highlightGfx      = null; // movement range overlay
-    this._shootingGfx       = null; // shooting target overlay
-    this._updateHandler     = null;
-    this._hitHandler        = null;
-    this._deathHandler      = null;
-    this._shotHandler       = null; // ranged shot animation
+    this.partySprites        = [];
+    this.enemySprites        = [];
+    this._highlightGfx       = null; // movement range overlay
+    this._shootingGfx        = null; // shooting target overlay
+    this._coneGfx            = null; // shot cone overlay (follows cursor)
+    this._updateHandler      = null;
+    this._hitHandler         = null;
+    this._deathHandler       = null;
+    this._shotHandler        = null; // ranged shot animation
+    this._shotModeHandler    = null; // shot-mode active/inactive
+    this._shotModeData       = null; // { active, fromPos, accuracy }
+    this._pointerMoveHandler = null;
   }
 
   // ── Lifecycle ────────────────────────────────────────────────
@@ -44,6 +48,13 @@ export default class CombatScene extends Phaser.Scene {
     this._shotHandler = (data) => this._animateShot(data);
     eventBridge.on('combat-shot',  this._shotHandler);
 
+    // Shot-mode cone overlay
+    this._shotModeHandler = (data) => {
+      this._shotModeData = data;
+      if (!data.active && this._coneGfx) this._coneGfx.clear();
+    };
+    eventBridge.on('shot-mode', this._shotModeHandler);
+
     // Pointer input → forward grid clicks to React
     this.input.on('pointerdown', (pointer) => {
       const gx = Math.floor(pointer.x / TILE_SIZE);
@@ -53,16 +64,31 @@ export default class CombatScene extends Phaser.Scene {
       }
     });
 
+    // Pointer move → update cone overlay during targeting
+    this._pointerMoveHandler = (pointer) => {
+      if (!this._shotModeData?.active) return;
+      const tileX = Math.floor(pointer.x / TILE_SIZE);
+      const tileY = Math.floor(pointer.y / TILE_SIZE);
+      if (tileX < 0 || tileX >= GRID_SIZE || tileY < 0 || tileY >= GRID_SIZE) {
+        if (this._coneGfx) this._coneGfx.clear();
+        return;
+      }
+      this._drawCone(this._shotModeData.fromPos, tileX, tileY, this._shotModeData.accuracy);
+    };
+    this.input.on('pointermove', this._pointerMoveHandler);
+
     // Tell React the scene is ready
     eventBridge.emit('phaser-ready', {});
   }
 
   shutdown() {
     // Remove all event listeners when scene shuts down
-    if (this._updateHandler) eventBridge.off('update-grid',  this._updateHandler);
-    if (this._hitHandler)    eventBridge.off('combat-hit',   this._hitHandler);
-    if (this._deathHandler)  eventBridge.off('combat-death', this._deathHandler);
-    if (this._shotHandler)   eventBridge.off('combat-shot',  this._shotHandler);
+    if (this._updateHandler)   eventBridge.off('update-grid',  this._updateHandler);
+    if (this._hitHandler)      eventBridge.off('combat-hit',   this._hitHandler);
+    if (this._deathHandler)    eventBridge.off('combat-death', this._deathHandler);
+    if (this._shotHandler)     eventBridge.off('combat-shot',  this._shotHandler);
+    if (this._shotModeHandler) eventBridge.off('shot-mode',    this._shotModeHandler);
+    this.input.off('pointermove', this._pointerMoveHandler);
   }
 
   // ── Grid Background ──────────────────────────────────────────
@@ -442,6 +468,65 @@ export default class CombatScene extends Phaser.Scene {
         });
       });
     }
+  }
+
+  // ── Shot Cone Overlay (follows cursor during targeting) ───────
+  _drawCone(fromPos, tileX, tileY, accuracy) {
+    if (!this._coneGfx) {
+      this._coneGfx = this.add.graphics();
+      this._coneGfx.setDepth(0.75); // above shooting targets, below sprites
+    }
+    this._coneGfx.clear();
+
+    const ax = fromPos.x * TILE_SIZE + TILE_SIZE / 2;
+    const ay = fromPos.y * TILE_SIZE + TILE_SIZE / 2;
+    const bx = tileX    * TILE_SIZE + TILE_SIZE / 2;
+    const by = tileY    * TILE_SIZE + TILE_SIZE / 2;
+
+    const dx  = bx - ax;
+    const dy  = by - ay;
+    const len = Math.sqrt(dx * dx + dy * dy);
+
+    // Always draw the shot tracer line
+    this._coneGfx.lineStyle(1, 0xffdd44, 0.8);
+    this._coneGfx.beginPath();
+    this._coneGfx.moveTo(ax, ay);
+    this._coneGfx.lineTo(bx, by);
+    this._coneGfx.strokePath();
+
+    // If no scatter (single shot or accuracy=0), just show the line
+    if (accuracy <= 0 || len < TILE_SIZE * 0.5) return;
+
+    // Perpendicular unit vector (rotated 90°)
+    const px = -dy / len;
+    const py =  dx / len;
+
+    // Half-width of the cone base at the cursor tile (accuracy in tiles)
+    const halfWidth = accuracy * TILE_SIZE;
+
+    // Triangle apex at shooter, base centred on cursor tile
+    const x2 = bx + px * halfWidth;
+    const y2 = by + py * halfWidth;
+    const x3 = bx - px * halfWidth;
+    const y3 = by - py * halfWidth;
+
+    // Filled cone
+    this._coneGfx.fillStyle(0xff8800, 0.13);
+    this._coneGfx.beginPath();
+    this._coneGfx.moveTo(ax, ay);
+    this._coneGfx.lineTo(x2, y2);
+    this._coneGfx.lineTo(x3, y3);
+    this._coneGfx.closePath();
+    this._coneGfx.fillPath();
+
+    // Cone outline
+    this._coneGfx.lineStyle(1, 0xff8800, 0.5);
+    this._coneGfx.beginPath();
+    this._coneGfx.moveTo(ax, ay);
+    this._coneGfx.lineTo(x2, y2);
+    this._coneGfx.lineTo(x3, y3);
+    this._coneGfx.closePath();
+    this._coneGfx.strokePath();
   }
 
   // ── Helpers ──────────────────────────────────────────────────
