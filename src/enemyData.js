@@ -159,8 +159,8 @@ function generateEnemyName(base, mission, multiplier) {
 }
 
 export function generateEncounter(mission, environment, characterRank) {
-  // Fixed at 3 enemies — testbed configuration
-  const enemyCount = 3;
+  // Fixed at 6 enemies — testbed configuration
+  const enemyCount = 6;
 
   const enemies = [];
   for (let i = 0; i < enemyCount; i++) {

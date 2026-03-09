@@ -209,7 +209,7 @@ WEAPONS.push(
     availability: WEAPON_AVAILABILITY.COMMON,
     description: "Standard-issue infantry rifle. Semi-auto and full-auto capable, robust under battlefield conditions.",
     specialRules: ["Reliable", "UB"],
-    accuracy: 5,
+    accuracy: 2,
     cost: 75,
   },
   {
@@ -227,7 +227,7 @@ WEAPONS.push(
     availability: WEAPON_AVAILABILITY.UNCOMMON,
     description: "Belt-fed suppression weapon. Lays down curtains of fire to pin and destroy enemy formations.",
     specialRules: ["Spray", "Bipod"],
-    accuracy: 10,
+    accuracy: 4,
     cost: 200,
   },
   {

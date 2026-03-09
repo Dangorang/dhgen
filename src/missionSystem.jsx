@@ -242,6 +242,24 @@ export default function MissionSystem({ onNavigate }) {
   useEffect(() => { partyReactionsUsedRef.current   = partyReactionsUsed;   }, [partyReactionsUsed]);
   useEffect(() => { enemyReactionsUsedRef.current   = enemyReactionsUsed;   }, [enemyReactionsUsed]);
 
+  // Emit shot-mode to Phaser so it can draw the cone overlay while targeting
+  useEffect(() => {
+    if (shootingMode && initiativeOrder.length > 0) {
+      const actor = initiativeOrder[currentTurn];
+      if (actor?.type === 'party') {
+        const char = party[actor.index];
+        const aw = getActiveWeapon(char, actor.index, activeWeapons);
+        const fromPos = gridPositions.party?.[actor.index];
+        // Single-shot has no scatter cone; burst modes use the weapon's accuracy
+        const accuracy = fireMode === 'single' ? 0 : (aw?.accuracy ?? 0);
+        if (fromPos) eventBridge.emit('shot-mode', { active: true, fromPos, accuracy });
+      }
+    } else {
+      eventBridge.emit('shot-mode', { active: false });
+    }
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [shootingMode, fireMode]);
+
   // Derived values for convenience
   const activeChar = party[currentPartyMember] || party[0] || null;
   const activeCharWounds = partyWounds[currentPartyMember] || 0;
@@ -1563,18 +1581,41 @@ export default function MissionSystem({ onNavigate }) {
           const ep       = gridPositions.enemies[eIdx];
           const perpDist = perpDistToRay(ep.x, ep.y, attackerPos.x, attackerPos.y, targetEnemyPos.x, targetEnemyPos.y);
           if (perpDist > weaponAccuracy) return;
-          const hitChance = Math.max(5, 50 - Math.floor(perpDist * 15));
+          // Linear falloff: 30% at centre → 0% at the cone edge (perpDist == weaponAccuracy)
+          const hitChance = Math.max(0, Math.round(30 * (1 - perpDist / weaponAccuracy)));
           if (d100() <= hitChance) {
             scatterHits++;
-            const scatDmg   = rollDamageDice(activeWep.damage, char.stats.psyRating || 0);
-            const scatArmor = Math.max(0, (encounter.enemies[eIdx].armor || 0) - (activeWep.pen || 0));
-            const scatNet   = Math.max(1, scatDmg - scatArmor);
-            log.push({ type: "player", text: `  ↳ Rnd ${r + 1} scatter → ${encounter.enemies[eIdx].name}: ${scatDmg} − ${scatArmor} = ${scatNet} dmg` });
-            newEnemyWounds[eIdx] = Math.max(0, newEnemyWounds[eIdx] - scatNet);
-            if (newEnemyWounds[eIdx] <= 0) {
-              eventBridge.emit('combat-death', { targetType: 'enemy', targetIndex: eIdx });
-              log.push({ type: "player", text: `  ↳ ${encounter.enemies[eIdx].name} is DEFEATED by scatter fire!` });
-              if (newEnemyWounds.every(w2 => w2 <= 0)) allDefeated = true;
+            const scatEnemy = encounter.enemies[eIdx];
+            // ── Scatter dodge check (uses reaction, same rules as direct fire) ──
+            let scatDodged = false;
+            if (enemyReactionsUsedRef.current[eIdx]) {
+              log.push({ type: "enemy", text: `  ↳ ${scatEnemy.name} has no reactions left — can't dodge scatter!` });
+            } else {
+              const scatDodgeRoll   = d100();
+              const scatDodgeTgt    = scatEnemy.stats?.agility || 20;
+              scatDodged = scatDodgeRoll <= scatDodgeTgt;
+              const nr = [...enemyReactionsUsedRef.current];
+              nr[eIdx] = true;
+              enemyReactionsUsedRef.current = nr;
+              setEnemyReactionsUsed(nr);
+              if (scatDodged) {
+                log.push({ type: "enemy", text: `  ↳ ${scatEnemy.name} dodges scatter! (AGI ${scatDodgeTgt}: rolled ${scatDodgeRoll})` });
+              } else {
+                log.push({ type: "enemy", text: `  ↳ ${scatEnemy.name} fails to dodge scatter (${scatDodgeRoll}/${scatDodgeTgt})` });
+              }
+            }
+            if (!scatDodged) {
+              const scatDmg   = rollDamageDice(activeWep.damage, char.stats.psyRating || 0);
+              const scatArmor = Math.max(0, (scatEnemy.armor || 0) - (activeWep.pen || 0));
+              const scatTb    = Math.floor((scatEnemy.stats?.toughness || 0) / 10);
+              const scatNet   = Math.max(1, scatDmg - scatArmor - scatTb);
+              log.push({ type: "player", text: `  ↳ Rnd ${r + 1} scatter → ${scatEnemy.name}: ${scatDmg} − Armor ${scatArmor}${scatTb ? ` − TB${scatTb}` : ''} = ${scatNet} dmg` });
+              newEnemyWounds[eIdx] = Math.max(0, newEnemyWounds[eIdx] - scatNet);
+              if (newEnemyWounds[eIdx] <= 0) {
+                eventBridge.emit('combat-death', { targetType: 'enemy', targetIndex: eIdx });
+                log.push({ type: "player", text: `  ↳ ${scatEnemy.name} is DEFEATED by scatter fire!` });
+                if (newEnemyWounds.every(w2 => w2 <= 0)) allDefeated = true;
+              }
             }
           }
         });
@@ -1614,9 +1655,10 @@ export default function MissionSystem({ onNavigate }) {
           const rawDmg  = rollDamageDice(activeWep.damage, char.stats.psyRating || 0);
           eventBridge.emit('combat-hit', { targetType: 'enemy', targetIndex: targetIdx });
           const effectiveArmor = Math.max(0, (target.armor || 0) - (activeWep.pen || 0));
-          const finalDmg = Math.max(1, rawDmg - effectiveArmor);
+          const tb       = Math.floor((target.stats?.toughness || 0) / 10);
+          const finalDmg = Math.max(1, rawDmg - effectiveArmor - tb);
           const hitLabel = totalHitsOnTarget > 1 ? `Hit ${h + 1}: ` : '';
-          log.push({ type: "player", text: `${hitLabel}${loc}! ${rawDmg} dmg − Armor ${effectiveArmor} = ${finalDmg}` });
+          log.push({ type: "player", text: `${hitLabel}${loc}! ${rawDmg} dmg − Armor ${effectiveArmor}${tb ? ` − TB${tb}` : ''} = ${finalDmg}` });
           newEnemyWounds[targetIdx] = Math.max(0, newEnemyWounds[targetIdx] - finalDmg);
           setEnemyBodyWounds(prev => {
             const upd = prev.map(bw => ({ ...bw }));
@@ -1693,8 +1735,9 @@ export default function MissionSystem({ onNavigate }) {
         const loc = hitLocation(roll);
         const rawDmg = rollDamageDice(activeWep.damage, char.stats.psyRating || 0);
         const effectiveArmor = Math.max(0, (randTarget.armor || 0) - (activeWep.pen || 0));
-        const finalDmg = Math.max(1, rawDmg - effectiveArmor);
-        log.push({ type: "player", text: `Suppressive hit on ${randTarget.name}! ${loc}: ${rawDmg} dmg − Armor ${effectiveArmor} = ${finalDmg}` });
+        const tb       = Math.floor((randTarget.stats?.toughness || 0) / 10);
+        const finalDmg = Math.max(1, rawDmg - effectiveArmor - tb);
+        log.push({ type: "player", text: `Suppressive hit on ${randTarget.name}! ${loc}: ${rawDmg} dmg − Armor ${effectiveArmor}${tb ? ` − TB${tb}` : ''} = ${finalDmg}` });
         newEnemyWounds[randomIdx] = Math.max(0, newEnemyWounds[randomIdx] - finalDmg);
         setEnemyBodyWounds(prev => {
           const upd = prev.map(bw => ({ ...bw }));
@@ -1871,8 +1914,9 @@ export default function MissionSystem({ onNavigate }) {
         if (!reactionBlocked) {
           eventBridge.emit('combat-hit', { targetType: 'enemy', targetIndex: impIdx });
           const effectiveArmor = Math.max(0, impEnemy.armor || 0); // pen 0 for improvised
-          const finalDmg = Math.max(1, rawDmg - effectiveArmor);
-          log.push({ type: "player", text: `Hit ${loc}! ${rawDmg} dmg (1d5+SB${sb}) − Armor ${effectiveArmor} = ${finalDmg}` });
+          const tb       = Math.floor((impEnemy.stats?.toughness || 0) / 10);
+          const finalDmg = Math.max(1, rawDmg - effectiveArmor - tb);
+          log.push({ type: "player", text: `Hit ${loc}! ${rawDmg} dmg (1d5+SB${sb}) − Armor ${effectiveArmor}${tb ? ` − TB${tb}` : ''} = ${finalDmg}` });
 
           const newEnemyWounds = [...enemyWounds];
           newEnemyWounds[impIdx] = Math.max(0, newEnemyWounds[impIdx] - finalDmg);
@@ -1987,11 +2031,12 @@ export default function MissionSystem({ onNavigate }) {
       if (!reactionBlocked) {
         eventBridge.emit('combat-hit', { targetType: 'enemy', targetIndex: enemyIdx });
 
-        // Apply Penetration vs Armor
+        // Apply Penetration vs Armor and Toughness Bonus
         const effectiveArmor = Math.max(0, (enemy.armor || 0) - (weapon.pen || 0));
-        const finalDmg       = Math.max(1, rawDmg - effectiveArmor);
+        const tb             = Math.floor((enemy.stats?.toughness || 0) / 10);
+        const finalDmg       = Math.max(1, rawDmg - effectiveArmor - tb);
 
-        log.push({ type: "player", text: `Hit ${loc}! ${rawDmg} dmg (${weapon.damage}+SB${sb}) − Armor ${effectiveArmor} (${enemy.armor}−Pen${weapon.pen || 0}) = ${finalDmg}` });
+        log.push({ type: "player", text: `Hit ${loc}! ${rawDmg} dmg (${weapon.damage}+SB${sb}) − Armor ${effectiveArmor}${tb ? ` − TB${tb}` : ''} = ${finalDmg}` });
 
         const newEnemyWounds = [...enemyWounds];
         newEnemyWounds[enemyIdx] = Math.max(0, newEnemyWounds[enemyIdx] - finalDmg);
@@ -2202,12 +2247,13 @@ export default function MissionSystem({ onNavigate }) {
         if (!reactionBlocked) {
           eventBridge.emit('combat-hit', { targetType: 'party', targetIndex: nearestIdx });
 
-          // Apply Penetration vs player armor
+          // Apply Penetration vs player armor and Toughness Bonus
           const charArmor      = getCharArmor(target);
           const effectiveArmor = Math.max(0, charArmor - (eWeapon.pen || 0));
-          const finalDmg       = Math.max(1, rawDmg - effectiveArmor);
+          const tb             = Math.floor((target.stats?.toughness || 0) / 10);
+          const finalDmg       = Math.max(1, rawDmg - effectiveArmor - tb);
 
-          log.push({ type: "enemy", text: `Hit ${loc}! ${rawDmg} dmg (${eWeapon.damage}+SB${sb}) − Armor ${effectiveArmor} (${charArmor}−Pen${eWeapon.pen || 0}) = ${finalDmg} to ${target.name}` });
+          log.push({ type: "enemy", text: `Hit ${loc}! ${rawDmg} dmg (${eWeapon.damage}+SB${sb}) − Armor ${effectiveArmor}${tb ? ` − TB${tb}` : ''} = ${finalDmg} to ${target.name}` });
 
           const newPartyWounds = [...partyWoundsRef.current];
           newPartyWounds[nearestIdx] = (newPartyWounds[nearestIdx] || 0) + finalDmg;
