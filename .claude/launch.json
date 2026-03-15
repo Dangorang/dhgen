@@ -3,8 +3,8 @@
   "configurations": [
     {
       "name": "dhgen-dev",
-      "runtimeExecutable": "npm",
-      "runtimeArgs": ["run", "dev", "--", "--port", "5173"],
+      "runtimeExecutable": "C:\\Program Files\\nodejs\\node.exe",
+      "runtimeArgs": ["C:\\Users\\dange\\dhgen\\node_modules\\vite\\bin\\vite.js", "--root", "C:\\Users\\dange\\dhgen", "--port", "5173"],
       "port": 5173
     }
   ]

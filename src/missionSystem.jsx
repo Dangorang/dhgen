@@ -44,6 +44,24 @@ function hitLocation(roll) {
 
 function getStrBonus(strength) { return Math.floor((strength || 10) / 10); }
 
+// ── Dodge tier helpers ─────────────────────────────────────────────────────
+// Party members: Adept = Precognition (AGI+PER+PSY), Veteran = Trained (AGI), else Base (AGI/2)
+function getCharDodgeTarget(char) {
+  const agi = char.stats?.agility    || 20;
+  const per = char.stats?.perception || 20;
+  const psy = char.stats?.psyRating  || 0;
+  if (char.class === 'Adept')            return { target: agi + per + psy, label: 'Precognition Dodge' };
+  if (char.class === 'Veteran Infantry') return { target: agi,             label: 'Trained Dodge'      };
+  return { target: Math.floor(agi / 2),                                    label: 'Base Dodge'          };
+}
+// Enemies: ability "Hyper Drugged Awareness" = AGI+20, skill "Trained Dodge" = AGI, else Base (AGI/2)
+function getEnemyDodgeTarget(enemy) {
+  const agi = enemy.stats?.agility || 20;
+  if ((enemy.abilities || []).some(a => a.includes('Hyper Drugged'))) return { target: agi + 20,              label: 'Hyper Awareness' };
+  if ((enemy.skills   || []).includes('Trained Dodge'))               return { target: agi,                   label: 'Trained Dodge'   };
+  return { target: Math.floor(agi / 2),                                                                       label: 'Base Dodge'      };
+}
+
 /**
  * Perpendicular distance from point (px, py) to the ray starting at (ax, ay)
  * going through (bx, by). Returns Infinity if the point is behind the shooter.
@@ -1592,14 +1610,14 @@ export default function MissionSystem({ onNavigate }) {
               log.push({ type: "enemy", text: `  ↳ ${scatEnemy.name} has no reactions left — can't dodge scatter!` });
             } else {
               const scatDodgeRoll   = d100();
-              const scatDodgeTgt    = scatEnemy.stats?.agility || 20;
+              const { target: scatDodgeTgt, label: scatDodgeLbl } = getEnemyDodgeTarget(scatEnemy);
               scatDodged = scatDodgeRoll <= scatDodgeTgt;
               const nr = [...enemyReactionsUsedRef.current];
               nr[eIdx] = true;
               enemyReactionsUsedRef.current = nr;
               setEnemyReactionsUsed(nr);
               if (scatDodged) {
-                log.push({ type: "enemy", text: `  ↳ ${scatEnemy.name} dodges scatter! (AGI ${scatDodgeTgt}: rolled ${scatDodgeRoll})` });
+                log.push({ type: "enemy", text: `  ↳ ${scatEnemy.name} dodges scatter! (${scatDodgeLbl} ${scatDodgeTgt}: rolled ${scatDodgeRoll})` });
               } else {
                 log.push({ type: "enemy", text: `  ↳ ${scatEnemy.name} fails to dodge scatter (${scatDodgeRoll}/${scatDodgeTgt})` });
               }
@@ -1635,10 +1653,10 @@ export default function MissionSystem({ onNavigate }) {
         log.push({ type: "enemy", text: `${target.name} has no reactions left — cannot dodge!` });
       } else {
         const dodgeRoll    = d100();
-        const dodgeTarget2 = target.stats.agility || 20;
+        const { target: dodgeTarget2, label: dodgeLbl2 } = getEnemyDodgeTarget(target);
         dodged = dodgeRoll <= dodgeTarget2;
         if (dodged) {
-          log.push({ type: "enemy", text: `${target.name} DODGES the burst! (AGI ${dodgeTarget2}: rolled ${dodgeRoll})` });
+          log.push({ type: "enemy", text: `${target.name} DODGES the burst! (${dodgeLbl2} ${dodgeTarget2}: rolled ${dodgeRoll})` });
         } else {
           log.push({ type: "enemy", text: `${target.name} fails to dodge (rolled ${dodgeRoll}/${dodgeTarget2})` });
         }
@@ -1889,11 +1907,11 @@ export default function MissionSystem({ onNavigate }) {
           log.push({ type: "enemy", text: `${impEnemy.name} has no reactions left — cannot dodge!` });
         } else {
           const dodgeRoll = d100();
-          const dodgeTarget = impEnemy.stats.agility || 20;
+          const { target: dodgeTarget, label: dodgeLbl } = getEnemyDodgeTarget(impEnemy);
           setEnemyReactionsUsed(prev => { const n = [...prev]; n[impIdx] = true; return n; });
           enemyReactionsUsedRef.current[impIdx] = true;
           if (dodgeRoll <= dodgeTarget) {
-            log.push({ type: "enemy", text: `${impEnemy.name} DODGES! (AGI ${dodgeTarget}: rolled ${dodgeRoll})` });
+            log.push({ type: "enemy", text: `${impEnemy.name} DODGES! (${dodgeLbl} ${dodgeTarget}: rolled ${dodgeRoll})` });
             reactionBlocked = true;
           } else {
             const canParry = (impEnemy.weapons || []).some(w => w.type === 'Melee');
@@ -2004,12 +2022,12 @@ export default function MissionSystem({ onNavigate }) {
         log.push({ type: "enemy", text: `${enemy.name} has no reactions left — cannot dodge!` });
       } else {
         const dodgeRoll   = d100();
-        const dodgeTarget = enemy.stats.agility || 20;
+        const { target: dodgeTarget, label: dodgeLbl } = getEnemyDodgeTarget(enemy);
         // Reaction spent regardless of success/failure
         setEnemyReactionsUsed(prev => { const n = [...prev]; n[enemyIdx] = true; return n; });
         enemyReactionsUsedRef.current[enemyIdx] = true;
         if (dodgeRoll <= dodgeTarget) {
-          log.push({ type: "enemy", text: `${enemy.name} DODGES! (AGI ${dodgeTarget}: rolled ${dodgeRoll})` });
+          log.push({ type: "enemy", text: `${enemy.name} DODGES! (${dodgeLbl} ${dodgeTarget}: rolled ${dodgeRoll})` });
           reactionBlocked = true;
         } else {
           const canParry = (enemy.weapons || []).some(w => w.type === 'Melee');
@@ -2061,6 +2079,102 @@ export default function MissionSystem({ onNavigate }) {
 
     setCombatLog(prevLog => [...prevLog, ...log]);
     setTimeout(() => advanceInitiative(currentTurn, initiativeOrder, gridPositions.party, gridPositions.enemies, enemyWounds), 1000);
+  }
+
+  // Shared ranged-attack resolver used by both ranged-style and melee-fallback AI paths.
+  // Returns true if an attack was fired (including jams), false if out of range.
+  function enemyRangedAttack(enemy, weapon, fromPos, targetPos, nearestIdx, target, isPinned, log) {
+    const weaponRangeM = parseRangeMeters(weapon.range);
+    const manhattan    = Math.abs(targetPos.x - fromPos.x) + Math.abs(targetPos.y - fromPos.y);
+    const { modifier: rangeMod, band: rangeBand } = getRangeBand(manhattan, weaponRangeM);
+    if (rangeMod === null) return false;
+
+    const rof       = parseRoF(weapon.rateOfFire);
+    const mode      = rof.fullAuto > 0 ? 'full' : rof.semiAuto > 0 ? 'semi' : 'single';
+    const rns       = enemy.stats.rangeSkill || 20;
+    const hitMod    = rangeMod + (isPinned ? -20 : 0) + (mode === 'full' ? -10 : 0);
+    const targetNum = Math.max(5, Math.min(100, rns + hitMod));
+    const roll      = d100();
+    const hit       = roll <= targetNum;
+    const modeLabel = mode === 'full' ? 'Full Auto' : mode === 'semi' ? 'Semi-Auto' : 'Single Shot';
+    const rounds    = mode === 'full' ? (rof.fullAuto || 10) : mode === 'semi' ? (rof.semiAuto || 3) : 1;
+    const animCount = mode === 'full' ? (rof.fullAuto || 1)  : mode === 'semi' ? (rof.semiAuto || 1)  : 1;
+    const modLabel  = hitMod !== 0 ? ` (${hitMod > 0 ? '+' : ''}${hitMod})` : '';
+
+    eventBridge.emit('combat-shot', {
+      fromPos, toPos: targetPos, count: animCount,
+      isHit: hit, weaponClass: weapon.class || 'Solid Projectile',
+    });
+
+    if (mode === 'full' && roll >= 94) {
+      log.push({ type: "enemy", text: `${enemy.name} fires ${weapon.name} [Full Auto] — WEAPON JAM! (rolled ${roll}) — turn lost!` });
+      return true;
+    }
+
+    const dos = hit ? Math.floor((targetNum - roll) / 10) : 0;
+    log.push({ type: "enemy", text: `${enemy.name} [${modeLabel}${rounds > 1 ? ` ×${rounds}` : ''}] fires ${weapon.name} at ${target.name} — ${rangeBand} (${manhattan * 3}m) · RNG ${rns}${modLabel} = ${targetNum}: rolled ${roll}... ${hit ? `HIT! (${dos} DoS)` : 'MISS!'}` });
+
+    const newPartyWounds = [...partyWoundsRef.current];
+    for (let r = 0; r < rounds; r++) {
+      const recoilPenalty = r * 5;
+      const roundTarget   = Math.max(5, targetNum - recoilPenalty);
+      const roundRoll     = r === 0 ? roll : d100();
+      const roundHit      = roundRoll <= roundTarget;
+      if (mode !== 'single') {
+        log.push({ type: "enemy", text: `  Rnd ${r + 1}: target ${roundTarget}${recoilPenalty ? ` (−${recoilPenalty} recoil)` : ''} → rolled ${roundRoll}... ${roundHit ? 'HIT' : 'miss'}` });
+      }
+      if (roundHit) {
+        const loc    = hitLocation(roundRoll);
+        const rawDmg = rollDamageDice(weapon.damage);
+        let reactionBlocked = false;
+        if (partyReactionsUsedRef.current[nearestIdx]) {
+          log.push({ type: "player", text: `${target.name} has no reactions left — cannot dodge!` });
+        } else {
+          const dodgeRoll   = d100();
+          const { target: dodgeTarget, label: dodgeLbl } = getCharDodgeTarget(target);
+          const nr = [...partyReactionsUsedRef.current];
+          nr[nearestIdx] = true;
+          partyReactionsUsedRef.current = nr;
+          setPartyReactionsUsed(nr);
+          if (dodgeRoll <= dodgeTarget) {
+            log.push({ type: "player", text: `${target.name} DODGES! (${dodgeLbl} ${dodgeTarget}: rolled ${dodgeRoll})` });
+            reactionBlocked = true;
+          } else {
+            log.push({ type: "player", text: `${target.name} failed to dodge (rolled ${dodgeRoll}/${dodgeTarget})` });
+          }
+        }
+        if (!reactionBlocked) {
+          eventBridge.emit('combat-hit', { targetType: 'party', targetIndex: nearestIdx });
+          const charArmor      = getCharArmor(target);
+          const effectiveArmor = Math.max(0, charArmor - (weapon.pen || 0));
+          const tb             = Math.floor((target.stats?.toughness || 0) / 10);
+          const finalDmg       = Math.max(1, rawDmg - effectiveArmor - tb);
+          log.push({ type: "enemy", text: `Hit ${loc}! ${rawDmg} dmg (${weapon.damage}) − Armor ${effectiveArmor}${tb ? ` − TB${tb}` : ''} = ${finalDmg} to ${target.name}` });
+          newPartyWounds[nearestIdx] = (newPartyWounds[nearestIdx] || 0) + finalDmg;
+          setPartyWounds([...newPartyWounds]);
+          setPartyBodyWounds(prev => {
+            const upd = prev.map(bw => ({ ...bw }));
+            if (upd[nearestIdx]) upd[nearestIdx] = { ...upd[nearestIdx], [loc]: (upd[nearestIdx][loc] || 0) + finalDmg };
+            return upd;
+          });
+          log.push({ type: "enemy", text: `${target.name}: ${Math.max(0, (target.wounds || 10) - newPartyWounds[nearestIdx])}/${target.wounds || 10} wounds remaining.` });
+          if (newPartyWounds[nearestIdx] >= (target.wounds || 10)) {
+            eventBridge.emit('combat-death', { targetType: 'party', targetIndex: nearestIdx });
+            log.push({ type: "enemy", text: `${target.name} has fallen!` });
+            const deadChar = party[nearestIdx];
+            const hasFate  = (deadChar.fate || 0) > 0;
+            const fateNotSpent = !fateSpentInMission || !fateSpentInMission[nearestIdx];
+            if (hasFate && fateNotSpent) {
+              setCombatLog(prevLog => [...prevLog, ...log]);
+              setPendingFateIndex(nearestIdx);
+              return true; // signal caller to also return
+            }
+            break;
+          }
+        }
+      }
+    }
+    return true;
   }
 
   function enemyTurn(turnIndex, initiativeArray, partyPositions, enemyPositions) {
@@ -2126,13 +2240,31 @@ export default function MissionSystem({ onNavigate }) {
     let currentEnemyPos = { ...enemyPos };
     let moved = false;
     
-    // Check if already adjacent (Chebyshev distance = 1)
+    // ── Weapon & style ────────────────────────────────────────────
+    const rangedWeapon = (enemy.weapons || []).find(
+      w => w.type !== 'Melee' && w.rateOfFire && w.rateOfFire !== '-'
+    );
+    const combatStyle = enemy.combatStyle || (rangedWeapon ? 'ranged' : 'melee');
+
+    console.log(`[ENEMY TURN] ${enemy.name} | style=${combatStyle} | weapons=`, enemy.weapons?.map(w => w.name));
+    console.log(`[ENEMY TURN] rangedWeapon=`, rangedWeapon ? `${rangedWeapon.name} RoF:${rangedWeapon.rateOfFire} range:${rangedWeapon.range}` : 'none');
+    console.log(`[ENEMY TURN] pos=${JSON.stringify(currentEnemyPos)} targetPos=${JSON.stringify(targetPos)}`);
+
     const dx = Math.abs(targetPos.x - currentEnemyPos.x);
     const dy = Math.abs(targetPos.y - currentEnemyPos.y);
-    const distToTarget = Math.max(dx, dy);
-    
-    // If not in attack range, try to move
-    if (distToTarget > 1) {
+    const distToTarget  = Math.max(dx, dy); // Chebyshev — melee adjacency
+    const manhattanDist = dx + dy;
+
+    // Ranged: close only until in weapon range. Melee: close until adjacent.
+    const rangedRangeM  = rangedWeapon ? parseRangeMeters(rangedWeapon.range) : 0;
+    const alreadyInRange = rangedWeapon
+      ? getRangeBand(manhattanDist, rangedRangeM).modifier !== null
+      : false;
+    const needsToClose = combatStyle === 'ranged' ? !alreadyInRange : distToTarget > 1;
+
+    console.log(`[ENEMY TURN] manhattan=${manhattanDist} chebyshev=${distToTarget} | rangedRangeM=${rangedRangeM} alreadyInRange=${alreadyInRange} needsToClose=${needsToClose}`);
+
+    if (needsToClose) {
       // Calculate best move towards target
       let bestMove = null;
       let bestDist = Infinity;
@@ -2172,61 +2304,69 @@ export default function MissionSystem({ onNavigate }) {
       }
     }
     
-    // Attack if in melee range (Chebyshev distance = 1)
-    const attackDx = Math.abs(targetPos.x - currentEnemyPos.x);
-    const attackDy = Math.abs(targetPos.y - currentEnemyPos.y);
-    const attackRange = Math.max(attackDx, attackDy);
+    // Post-move distances
+    const postDx = Math.abs(targetPos.x - currentEnemyPos.x);
+    const postDy = Math.abs(targetPos.y - currentEnemyPos.y);
+    const postChebyshev  = Math.max(postDx, postDy);
+    const postManhattan  = postDx + postDy;
 
-    if (attackRange <= 1) {
-      // Pick enemy's first melee weapon (or fists)
+    console.log(`[ENEMY TURN] post-move pos=${JSON.stringify(currentEnemyPos)} | postManhattan=${postManhattan} postChebyshev=${postChebyshev}`);
+
+    const isPinned = enemyPinnedRef.current[actor.index] || false;
+    // Consume pinned regardless of attack type
+    if (isPinned) {
+      setEnemyPinned(prev => { const next = [...prev]; next[actor.index] = false; return next; });
+    }
+
+    let didAttack = false;
+
+    // ── RANGED ATTACK ─────────────────────────────────────────────
+    console.log(`[ENEMY ATTACK] checking ranged: combatStyle=${combatStyle} hasRangedWeapon=${!!rangedWeapon}`);
+    if (combatStyle === 'ranged' && rangedWeapon) {
+      console.log(`[ENEMY ATTACK] ranged: postManhattan=${postManhattan} weaponRange=${rangedWeapon.range}`);
+      didAttack = enemyRangedAttack(enemy, rangedWeapon, currentEnemyPos, targetPos, nearestIdx, target, isPinned, log);
+    }
+
+    // ── MELEE FALLBACK: fire sidearm if can't reach ────────────────
+    // Melee-style enemies with a ranged weapon shoot if they couldn't close to melee range
+    if (!didAttack && combatStyle === 'melee' && rangedWeapon && postChebyshev > 1) {
+      console.log(`[ENEMY ATTACK] melee fallback ranged: postManhattan=${postManhattan} weaponRange=${rangedWeapon.range}`);
+      didAttack = enemyRangedAttack(enemy, rangedWeapon, currentEnemyPos, targetPos, nearestIdx, target, isPinned, log);
+    }
+
+    // ── MELEE ATTACK ──────────────────────────────────────────────
+    console.log(`[ENEMY ATTACK] checking melee: didAttack=${didAttack} postChebyshev=${postChebyshev}`);
+    if (!didAttack && postChebyshev <= 1) {
       const eWeapon = (enemy.weapons || []).find(w => w.type === 'Melee')
         || { name: 'Fists', damage: '1d5', pen: 0, type: 'Melee' };
 
-      // 1. Attack roll — apply pinned penalty if applicable
-      const isPinned = enemyPinnedRef.current[actor.index] || false;
-      const ems  = enemy.stats.meleeSkill || 20;
-      const pinnedPenalty = isPinned ? -20 : 0;
-      const effectiveEms = Math.max(5, ems + pinnedPenalty);
+      const ems          = enemy.stats.meleeSkill || 20;
+      const effectiveEms = Math.max(5, ems + (isPinned ? -20 : 0));
       const roll = d100();
       const hit  = roll <= effectiveEms;
       const dos  = hit ? Math.floor((effectiveEms - roll) / 10) : 0;
 
-      // Clear pinned status after attack (pin is spent)
-      if (isPinned) {
-        setEnemyPinned(prev => {
-          const next = [...prev];
-          next[actor.index] = false;
-          return next;
-        });
-      }
-
       log.push({ type: "enemy", text: `${enemy.name}${isPinned ? ' [PINNED −20]' : ''} attacks ${target.name} with ${eWeapon.name} (MEL ${effectiveEms}): rolled ${roll}... ${hit ? `HIT! (${dos} DoS)` : 'MISS!'}` });
 
       if (hit) {
-        // 3. Hit location
-        const loc = hitLocation(roll);
-
-        // 4. Damage = weapon dice + Strength Bonus
+        const loc    = hitLocation(roll);
         const sb     = getStrBonus(enemy.stats.strength || 20);
         const rawDmg = rollDamageDice(eWeapon.damage) + sb;
 
-        // 5. Player Reaction: Dodge or Parry (gated by 1-per-turn limit)
         let reactionBlocked = false;
         if (partyReactionsUsedRef.current[nearestIdx]) {
           log.push({ type: "player", text: `${target.name} has no reactions left — cannot dodge!` });
         } else {
           const dodgeRoll   = d100();
-          const dodgeTarget = target.stats.agility || 20;
-          // Mark reaction used regardless of success/failure
+          const { target: dodgeTarget, label: dodgeLbl } = getCharDodgeTarget(target);
           const nr = [...partyReactionsUsedRef.current];
           nr[nearestIdx] = true;
           partyReactionsUsedRef.current = nr;
           setPartyReactionsUsed(nr);
           if (dodgeRoll <= dodgeTarget) {
-            log.push({ type: "player", text: `${target.name} DODGES! (AGI ${dodgeTarget}: rolled ${dodgeRoll})` });
+            log.push({ type: "player", text: `${target.name} DODGES! (${dodgeLbl} ${dodgeTarget}: rolled ${dodgeRoll})` });
             reactionBlocked = true;
           } else {
-            // Parry if player has a melee weapon (equipment may be {id,name,desc} objects)
             const hasMelee = (target.equipment || []).some(item => { const w = getWeaponById(itemId(item)); return w && w.type === 'Melee'; });
             if (hasMelee) {
               const parryBonus  = (target.equipment || []).some(item => itemId(item) === 'shield_arm') ? 10 : 0;
@@ -2246,13 +2386,10 @@ export default function MissionSystem({ onNavigate }) {
 
         if (!reactionBlocked) {
           eventBridge.emit('combat-hit', { targetType: 'party', targetIndex: nearestIdx });
-
-          // Apply Penetration vs player armor and Toughness Bonus
           const charArmor      = getCharArmor(target);
           const effectiveArmor = Math.max(0, charArmor - (eWeapon.pen || 0));
           const tb             = Math.floor((target.stats?.toughness || 0) / 10);
           const finalDmg       = Math.max(1, rawDmg - effectiveArmor - tb);
-
           log.push({ type: "enemy", text: `Hit ${loc}! ${rawDmg} dmg (${eWeapon.damage}+SB${sb}) − Armor ${effectiveArmor}${tb ? ` − TB${tb}` : ''} = ${finalDmg} to ${target.name}` });
 
           const newPartyWounds = [...partyWoundsRef.current];
@@ -2268,7 +2405,6 @@ export default function MissionSystem({ onNavigate }) {
           if (newPartyWounds[nearestIdx] >= (target.wounds || 10)) {
             eventBridge.emit('combat-death', { targetType: 'party', targetIndex: nearestIdx });
             log.push({ type: "enemy", text: `${target.name} has fallen!` });
-
             const deadChar = party[nearestIdx];
             const hasFate  = (deadChar.fate || 0) > 0;
             const fateNotSpent = !fateSpentInMission || !fateSpentInMission[nearestIdx];

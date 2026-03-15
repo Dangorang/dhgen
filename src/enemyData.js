@@ -17,6 +17,79 @@ export const ENVIRONMENTS = {
   DEAD_HIVE: "Dead Hive",
 };
 
+// Weapon loadout pools per enemy type.
+// Each entry: { style: 'melee'|'ranged', weapons: [...], weight: number }
+// style drives AI: 'ranged' = stay at distance and shoot; 'melee' = charge and brawl
+// All weapon objects include rateOfFire and class so the AI can parse fire modes.
+const ENEMY_WEAPON_POOLS = {
+  [ENEMY_TYPES.GANGER]: [
+    { style: 'melee', weight: 45, weapons: [
+      { name: "Rusty Knife",  damage: "1d5+1",  pen: 0, range: "Melee", type: "Melee",  rateOfFire: "-",     class: "Primitive" },
+      { name: "Stub Pistol",  damage: "1d10-1", pen: 0, range: "30m",   type: "Pistol", rateOfFire: "S/-/-", class: "Solid Projectile", accuracy: 1 },
+    ]},
+    { style: 'ranged', weight: 35, weapons: [
+      { name: "Autogun",      damage: "1d10",   pen: 0, range: "50m",   type: "Basic",  rateOfFire: "S/3/-", class: "Solid Projectile", accuracy: 4 },
+    ]},
+    { style: 'melee', weight: 20, weapons: [
+      { name: "Chain Knife",  damage: "1d5+3",  pen: 1, range: "Melee", type: "Melee",  rateOfFire: "-",     class: "Chain" },
+      { name: "Autopistol",   damage: "1d10-1", pen: 0, range: "15m",   type: "Pistol", rateOfFire: "S/3/6", class: "Solid Projectile", accuracy: 3 },
+    ]},
+  ],
+  [ENEMY_TYPES.CULTIST]: [
+    { style: 'melee', weight: 40, weapons: [
+      { name: "Chain Knife",   damage: "1d5+3", pen: 1, range: "Melee", type: "Melee",  rateOfFire: "-",     class: "Chain" },
+      { name: "Laspistol",     damage: "1d10",  pen: 0, range: "30m",   type: "Pistol", rateOfFire: "S/2/-", class: "Las",             accuracy: 2 },
+    ]},
+    { style: 'ranged', weight: 35, weapons: [
+      { name: "Autogun",       damage: "1d10",  pen: 0, range: "50m",   type: "Basic",  rateOfFire: "S/3/-", class: "Solid Projectile", accuracy: 4 },
+      { name: "Ritual Blade",  damage: "1d5+2", pen: 0, range: "Melee", type: "Melee",  rateOfFire: "-",     class: "Primitive" },
+    ]},
+    { style: 'melee', weight: 25, weapons: [
+      { name: "Ritual Blade",  damage: "1d10+1", pen: 0, range: "Melee", type: "Melee", rateOfFire: "-",     class: "Primitive" },
+    ]},
+  ],
+  [ENEMY_TYPES.SERVITOR]: [
+    { style: 'ranged', weight: 45, weapons: [
+      { name: "Heavy Flamer",  damage: "1d10+4", pen: 4, range: "20m",   type: "Basic",  rateOfFire: "S/2/-",  class: "Flamer",  accuracy: 0 },
+      { name: "Power Claw",    damage: "1d10+5", pen: 5, range: "Melee", type: "Melee",  rateOfFire: "-",      class: "Power" },
+    ]},
+    { style: 'ranged', weight: 35, weapons: [
+      { name: "Twin Bolter",   damage: "1d10+5", pen: 4, range: "60m",   type: "Heavy",  rateOfFire: "-/-/8",  class: "Bolter", accuracy: 5 },
+      { name: "Power Claw",    damage: "1d10+5", pen: 5, range: "Melee", type: "Melee",  rateOfFire: "-",      class: "Power" },
+    ]},
+    { style: 'melee', weight: 20, weapons: [
+      { name: "Power Claw",    damage: "1d10+5", pen: 5, range: "Melee", type: "Melee",  rateOfFire: "-",      class: "Power" },
+      { name: "Buzz Saw Arm",  damage: "1d10+4", pen: 3, range: "Melee", type: "Melee",  rateOfFire: "-",      class: "Chain" },
+    ]},
+  ],
+  [ENEMY_TYPES.HERETEK]: [
+    { style: 'ranged', weight: 50, weapons: [
+      { name: "Arc Pistol",    damage: "1d10+3", pen: 2, range: "30m",   type: "Pistol", rateOfFire: "S/2/-",  class: "Las",    accuracy: 2 },
+      { name: "Mechadendrites",damage: "1d5+2",  pen: 1, range: "Melee", type: "Melee",  rateOfFire: "-",      class: "Mechadendrite" },
+    ]},
+    { style: 'ranged', weight: 30, weapons: [
+      { name: "Plasma Pistol", damage: "1d10+5", pen: 4, range: "20m",   type: "Pistol", rateOfFire: "S/1/-",  class: "Plasma", accuracy: 0 },
+      { name: "Mechadendrites",damage: "1d5+2",  pen: 1, range: "Melee", type: "Melee",  rateOfFire: "-",      class: "Mechadendrite" },
+    ]},
+    { style: 'melee', weight: 20, weapons: [
+      { name: "Mechadendrites",damage: "1d5+2",  pen: 1, range: "Melee", type: "Melee",  rateOfFire: "-",      class: "Mechadendrite" },
+      { name: "Arc Pistol",    damage: "1d10+3", pen: 2, range: "30m",   type: "Pistol", rateOfFire: "S/2/-",  class: "Las",    accuracy: 2 },
+    ]},
+  ],
+};
+
+function pickWeaponLoadout(type) {
+  const pool = ENEMY_WEAPON_POOLS[type];
+  if (!pool) return { style: 'melee', weapons: [{ name: "Fists", damage: "1d5", pen: 0, range: "Melee", type: "Melee", rateOfFire: "-", class: "Primitive" }] };
+  const totalWeight = pool.reduce((sum, e) => sum + e.weight, 0);
+  let roll = Math.random() * totalWeight;
+  for (const entry of pool) {
+    roll -= entry.weight;
+    if (roll <= 0) return entry;
+  }
+  return pool[0];
+}
+
 const BASE_ENEMIES = [
   {
     id: "drugged_ganger",
@@ -32,6 +105,19 @@ const BASE_ENEMIES = [
     xpValue: 25,
   },
   {
+    id: "hyper_drugged_ganger",
+    name: "Hyper Drugged Ganger",
+    type: ENEMY_TYPES.GANGER,
+    description: "A ganger pumped full of combat stimms, twitching with unnatural speed and reflexes.",
+    stats: { meleeSkill: 30, rangeSkill: 20, strength: 30, toughness: 20, agility: 35, intelligence: 5, perception: 25, willpower: 10, fellowship: 5, psyRating: 0 },
+    wounds: 10,
+    armor: 0,
+    weapons: [{ name: "Rusty Knife", damage: "1d5+1", pen: 0, range: "Melee", type: "Melee" }],
+    skills: ["Awareness", "Dodge"],
+    abilities: ["Hyper Drugged Awareness (+20 Dodge)", "Stimm Rush (+5 WS first round)"],
+    xpValue: 40,
+  },
+  {
     id: "cultist_fanatic",
     name: "Cultist Fanatic",
     type: ENEMY_TYPES.CULTIST,
@@ -40,7 +126,7 @@ const BASE_ENEMIES = [
     wounds: 9,
     armor: 1,
     weapons: [{ name: "Chain Knife", damage: "1d5+3", pen: 1, range: "Melee", type: "Melee" }],
-    skills: ["Awareness", "Intimidate", "Dodge"],
+    skills: ["Awareness", "Intimidate", "Trained Dodge"],
     abilities: ["Dark Fury (+15 WS when near allies)"],
     xpValue: 35,
   },
@@ -132,6 +218,8 @@ export function generateEnemy(mission, environment) {
 
   const name = generateEnemyName(baseEnemy, mission, difficultyMultiplier);
 
+  const loadout = pickWeaponLoadout(selectedType);
+
   return {
     ...baseEnemy,
     id: `${baseEnemy.id}_${Date.now()}`,
@@ -141,6 +229,8 @@ export function generateEnemy(mission, environment) {
     armor,
     xpValue,
     difficultyMultiplier,
+    weapons: loadout.weapons,
+    combatStyle: loadout.style,
   };
 }
 

@@ -2,6 +2,7 @@ import { useState } from "react";
 import CharacterCreator from "./CharacterCreator";
 import CharacterRoster from "./CharacterRoster";
 import MissionSystem from "./missionSystem";
+import SectorMap from "./SectorMap";
 
 function HomeScreen({ onNavigate }) {
   return (
@@ -43,6 +44,10 @@ function HomeScreen({ onNavigate }) {
 			  Missions
 			  <span className="menu-btn-sub">Deploy your Acolytes into the field</span>
 			</button>
+          <button className="menu-btn" onClick={() => onNavigate("sector")}>
+            Sector Map
+            <span className="menu-btn-sub">Navigate the Golgenna Reach</span>
+          </button>
         </div>
 
         <div style={{ textAlign: "center", marginTop: 60, fontSize: 10, color: "#2a1808", letterSpacing: 3, fontFamily: "Cinzel" }}>
@@ -58,6 +63,7 @@ export default function App() {
   if (screen === "creator") return <CharacterCreator onNavigate={setScreen} />;
   if (screen === "roster") return <CharacterRoster onNavigate={setScreen} />;
   if (screen === "missions") return <MissionSystem onNavigate={setScreen} />;
-  
+  if (screen === "sector")   return <SectorMap onNavigate={setScreen} />;
+
   return <HomeScreen onNavigate={setScreen} />;
 }
