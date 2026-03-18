@@ -24,6 +24,7 @@ export default class CombatScene extends Phaser.Scene {
     this._highlightGfx       = null; // movement range overlay
     this._shootingGfx        = null; // shooting target overlay
     this._coneGfx            = null; // shot cone overlay (follows cursor)
+    this._terrainGfx         = null; // terrain: platforms + cover barriers
     this._updateHandler      = null;
     this._hitHandler         = null;
     this._deathHandler       = null;
@@ -120,6 +121,7 @@ export default class CombatScene extends Phaser.Scene {
       enemies,
     } = data;
 
+    this._drawTerrain(data.terrain);
     this._drawMovementRange(data.movementHighlight);
     this._drawShootingTargets(data.shootingMode, gridPositions?.enemies, enemyWounds);
     if (gridPositions?.party)   this._updatePartySprites(gridPositions.party,   partyWounds,  currentTurn, initiativeOrder, party);
@@ -144,6 +146,56 @@ export default class CombatScene extends Phaser.Scene {
         const py = pos.y * TILE_SIZE;
         this._shootingGfx.fillRect(px + 1, py + 1, TILE_SIZE - 2, TILE_SIZE - 2);
         this._shootingGfx.strokeRect(px + 1, py + 1, TILE_SIZE - 2, TILE_SIZE - 2);
+      }
+    });
+  }
+
+  // ── Terrain Rendering ─────────────────────────────────────────
+  _drawTerrain(terrain) {
+    if (!this._terrainGfx) {
+      this._terrainGfx = this.add.graphics();
+      this._terrainGfx.setDepth(0.45); // above grid checkerboard, below movement highlight
+    }
+    this._terrainGfx.clear();
+    if (!terrain?.length) return;
+
+    terrain.forEach(t => {
+      const px = t.x * TILE_SIZE;
+      const py = t.y * TILE_SIZE;
+      const pw = t.w * TILE_SIZE;
+      const ph = t.h * TILE_SIZE;
+
+      if (t.type === 'platform') {
+        // Base fill — dark stone
+        this._terrainGfx.fillStyle(0x3a3a3a, 1);
+        this._terrainGfx.fillRect(px, py, pw, ph);
+        // Top-face highlight (lighter strip, simulates elevation)
+        this._terrainGfx.fillStyle(0x5a5a5a, 1);
+        this._terrainGfx.fillRect(px, py, pw, 4);
+        this._terrainGfx.fillRect(px, py, 4, ph);
+        // Edge shadow (bottom-right)
+        this._terrainGfx.fillStyle(0x1a1a1a, 0.8);
+        this._terrainGfx.fillRect(px, py + ph - 3, pw, 3);
+        this._terrainGfx.fillRect(px + pw - 3, py, 3, ph);
+        // Outline
+        this._terrainGfx.lineStyle(2, 0x7a7a5a, 0.9);
+        this._terrainGfx.strokeRect(px, py, pw, ph);
+        // "UP" indicator — small diamond in the centre
+        const cx = px + pw / 2;
+        const cy = py + ph / 2;
+        this._terrainGfx.fillStyle(0xaaaa77, 0.6);
+        this._terrainGfx.fillTriangle(cx, cy - 5, cx - 4, cy + 3, cx + 4, cy + 3);
+      } else if (t.type === 'cover') {
+        // Jersey barrier — sandy concrete colour
+        this._terrainGfx.fillStyle(0x6e6a4a, 1);
+        this._terrainGfx.fillRect(px + 3, py + 3, pw - 6, ph - 6);
+        // Top highlight
+        this._terrainGfx.fillStyle(0x9a9472, 0.75);
+        this._terrainGfx.fillRect(px + 3, py + 3, pw - 6, 3);
+        this._terrainGfx.fillRect(px + 3, py + 3, 3, ph - 6);
+        // Outline
+        this._terrainGfx.lineStyle(2, 0xb0aa80, 0.85);
+        this._terrainGfx.strokeRect(px + 3, py + 3, pw - 6, ph - 6);
       }
     });
   }
@@ -193,11 +245,11 @@ export default class CombatScene extends Phaser.Scene {
 
       if (!this.partySprites[i]) {
         // Create sprite at target position immediately (no tween on first spawn)
-        const rect = this.add.rectangle(px, py, TILE_SIZE - 4, TILE_SIZE - 4, 0x1a5a1a);
+        const rect = this.add.rectangle(px, py, TILE_SIZE - 4, TILE_SIZE - 4, 0x1a5a1a).setDepth(1);
         rect.setStrokeStyle(1, 0x3a8a3a);
         const txt = this.add.text(px, py, label, {
           fontSize: '9px', color: '#5aba5a', fontFamily: 'Arial', fontStyle: 'bold',
-        }).setOrigin(0.5);
+        }).setOrigin(0.5).setDepth(1.1);
         this.partySprites[i] = { rect, txt, gridX: pos.x, gridY: pos.y };
       } else {
         const sprite = this.partySprites[i];
@@ -266,11 +318,11 @@ export default class CombatScene extends Phaser.Scene {
       const label     = 'E' + (i + 1);
 
       if (!this.enemySprites[i]) {
-        const rect = this.add.rectangle(px, py, TILE_SIZE - 4, TILE_SIZE - 4, 0x5a1a1a);
+        const rect = this.add.rectangle(px, py, TILE_SIZE - 4, TILE_SIZE - 4, 0x5a1a1a).setDepth(1);
         rect.setStrokeStyle(1, 0x8a3a3a);
         const txt = this.add.text(px, py, label, {
           fontSize: '9px', color: '#fa5a5a', fontFamily: 'Arial', fontStyle: 'bold',
-        }).setOrigin(0.5);
+        }).setOrigin(0.5).setDepth(1.1);
         this.enemySprites[i] = { rect, txt, gridX: pos.x, gridY: pos.y };
       } else {
         const sprite = this.enemySprites[i];

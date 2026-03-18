@@ -62,6 +62,126 @@ function getEnemyDodgeTarget(enemy) {
   return { target: Math.floor(agi / 2),                                                                       label: 'Base Dodge'      };
 }
 
+// ── Terrain helpers ────────────────────────────────────────────────────────
+
+/** All tiles occupied by a terrain piece */
+function terrainTiles(t) {
+  const tiles = [];
+  for (let dy = 0; dy < t.h; dy++)
+    for (let dx = 0; dx < t.w; dx++)
+      tiles.push({ x: t.x + dx, y: t.y + dy });
+  return tiles;
+}
+
+/** True if grid position (x,y) falls inside any cover tile (impassable barriers) */
+function isCoverTile(x, y, terrain) {
+  return terrain.some(t => t.type === 'cover' &&
+    x >= t.x && x < t.x + t.w && y >= t.y && y < t.y + t.h);
+}
+
+/** True if position is on an elevated platform */
+function isOnPlatform(pos, terrain) {
+  return terrain.some(t => t.type === 'platform' &&
+    pos.x >= t.x && pos.x < t.x + t.w && pos.y >= t.y && pos.y < t.y + t.h);
+}
+
+/**
+ * Bresenham line-of-sight check.
+ * Returns false if any platform tile (not occupied by shooter or target) lies on the line.
+ */
+function hasLineOfSight(fromPos, toPos, terrain) {
+  let x0 = fromPos.x, y0 = fromPos.y;
+  const x1 = toPos.x,  y1 = toPos.y;
+  const dx = Math.abs(x1 - x0), dy = Math.abs(y1 - y0);
+  const sx = x0 < x1 ? 1 : -1, sy = y0 < y1 ? 1 : -1;
+  let err = dx - dy;
+  while (true) {
+    const isEndpoint = (x0 === fromPos.x && y0 === fromPos.y) || (x0 === x1 && y0 === y1);
+    if (!isEndpoint) {
+      const blocked = terrain.some(t => t.type === 'platform' &&
+        x0 >= t.x && x0 < t.x + t.w && y0 >= t.y && y0 < t.y + t.h);
+      if (blocked) return false;
+    }
+    if (x0 === x1 && y0 === y1) break;
+    const e2 = 2 * err;
+    if (e2 > -dy) { err -= dy; x0 += sx; }
+    if (e2 <  dx) { err += dx; y0 += sy; }
+  }
+  return true;
+}
+
+/**
+ * Returns true if targetPos has partial cover vs a shot from shooterPos.
+ * A cover tile adjacent to the target counts if it lies between target and shooter.
+ */
+function hasCoverVsShooter(targetPos, shooterPos, terrain) {
+  const distTS = Math.abs(targetPos.x - shooterPos.x) + Math.abs(targetPos.y - shooterPos.y);
+  for (const t of terrain) {
+    if (t.type !== 'cover') continue;
+    for (const { x: cx, y: cy } of terrainTiles(t)) {
+      // Adjacent to target?
+      if (Math.abs(cx - targetPos.x) > 1 || Math.abs(cy - targetPos.y) > 1) continue;
+      // Closer to shooter than the target is?
+      const distCS = Math.abs(cx - shooterPos.x) + Math.abs(cy - shooterPos.y);
+      if (distCS < distTS) return true;
+    }
+  }
+  return false;
+}
+
+/** Body locations blocked by partial cover (legs & torso) */
+const COVERED_LOCS = new Set(['Body', 'Right Leg', 'Left Leg']);
+
+/**
+ * Generate terrain for one combat encounter.
+ * Platforms: elevated, blocks LoS, entities can stand on them.
+ * Cover: impassable barriers, provide cover saves to adjacent characters.
+ * Placed only in the middle zone (x 6–14) to leave spawn areas clear.
+ */
+function generateTerrain() {
+  const terrain  = [];
+  const occupied = new Set();
+
+  const mark = (x, y, w, h) => {
+    for (let dy = 0; dy < h; dy++)
+      for (let dx = 0; dx < w; dx++)
+        occupied.add(`${x + dx},${y + dy}`);
+  };
+
+  const canPlace = (x, y, w, h) => {
+    if (x < 6 || x + w > 15 || y < 1 || y + h > 19) return false;
+    for (let dy = 0; dy < h; dy++)
+      for (let dx = 0; dx < w; dx++)
+        if (occupied.has(`${x + dx},${y + dy}`)) return false;
+    return true;
+  };
+
+  const tryPlace = (type, sizes, count) => {
+    for (let i = 0; i < count; i++) {
+      const { w, h } = sizes[Math.floor(Math.random() * sizes.length)];
+      for (let attempt = 0; attempt < 40; attempt++) {
+        const x = 6  + Math.floor(Math.random() * (9  - w + 1));
+        const y = 1  + Math.floor(Math.random() * (18 - h + 1));
+        if (canPlace(x, y, w, h)) {
+          terrain.push({ type, x, y, w, h });
+          mark(x, y, w, h);
+          break;
+        }
+      }
+    }
+  };
+
+  // Platforms: 1×1, 2×2, or 2×3
+  const platformSizes = [{ w: 1, h: 1 }, { w: 2, h: 2 }, { w: 2, h: 3 }, { w: 3, h: 2 }];
+  tryPlace('platform', platformSizes, 2 + Math.floor(Math.random() * 2)); // 2–3
+
+  // Cover barriers: 1×1 or 1×2 strips
+  const coverSizes = [{ w: 1, h: 1 }, { w: 1, h: 2 }, { w: 2, h: 1 }];
+  tryPlace('cover', coverSizes, 3 + Math.floor(Math.random() * 2)); // 3–4
+
+  return terrain;
+}
+
 /**
  * Perpendicular distance from point (px, py) to the ray starting at (ax, ay)
  * going through (bx, by). Returns Infinity if the point is behind the shooter.
@@ -245,6 +365,9 @@ export default function MissionSystem({ onNavigate }) {
   const [enemyPinned, setEnemyPinned] = useState([]);     // boolean[] — pinned enemies get -20 on next attack
   const [partyReactionsUsed,  setPartyReactionsUsed]  = useState([]); // boolean[] — party member used their 1 reaction this round
   const [enemyReactionsUsed,  setEnemyReactionsUsed]  = useState([]); // boolean[] — enemy used their 1 reaction this round
+  const [terrain, setTerrain] = useState([]); // terrain pieces: platforms + cover barriers
+  const terrainRef = useRef([]);
+  useEffect(() => { terrainRef.current = terrain; }, [terrain]);
 
   // Initiative system
   const [initiativeOrder, setInitiativeOrder] = useState([]); // Array of {type: 'party'|'enemy', index: number, initiative: number}
@@ -312,6 +435,7 @@ export default function MissionSystem({ onNavigate }) {
     enemies: encounter?.enemies || [],
     movementHighlight,
     shootingMode,
+    terrain,
   } : null;
 
   // ── PHASE: SELECT PARTY ──────────────────────────────────────
@@ -1231,6 +1355,9 @@ export default function MissionSystem({ onNavigate }) {
       y: 5 + i * 3,
     }));
     
+    const generatedTerrain = generateTerrain();
+    setTerrain(generatedTerrain);
+    terrainRef.current = generatedTerrain;
     setGridPositions({ party: partyPositions, enemies: enemyPositions });
     setPartyBodyWounds(party.map(() => emptyBodyWounds()));
     setEnemyBodyWounds(generatedEncounter.enemies.map(() => emptyBodyWounds()));
@@ -1447,6 +1574,12 @@ export default function MissionSystem({ onNavigate }) {
       setCombatLog(prev => [...prev, { type: "system", text: "Cannot move into enemy space!" }]);
       return;
     }
+
+    // Check if position is a cover barrier (impassable)
+    if (isCoverTile(x, y, terrain)) {
+      setCombatLog(prev => [...prev, { type: "system", text: "That tile is blocked by a barrier!" }]);
+      return;
+    }
     
     // Valid move - update position
     const newPartyPositions = [...gridPositions.party];
@@ -1508,15 +1641,24 @@ export default function MissionSystem({ onNavigate }) {
       return; // keep shooting mode active so player can pick a closer target
     }
 
+    // LoS check — platforms block shots
+    if (!hasLineOfSight(attackerPos, targetEnemyPos, terrain)) {
+      setCombatLog(prev => [...prev, { type: "system", text: `No line of sight to ${target.name} — a platform is blocking the shot!` }]);
+      return; // keep shooting mode active
+    }
+
     setShootingMode(false);
     const per = char.stats.perception || 20;
     const rof = parseRoF(activeWep.rateOfFire);
     const mode = fireMode; // 'single' | 'semi' | 'full' — captured from state closure
 
-    // To-hit modifier: range band (base) + aim bonus (single only) + full-auto penalty
+    // To-hit modifier: range band (base) + aim bonus (single only) + full-auto penalty + elevation
     let hitMod = rangeMod;
     if (aiming && mode === 'single') hitMod += 20;
     if (mode === 'full') hitMod -= 10;
+    const shooterElevated = isOnPlatform(attackerPos, terrain);
+    const targetElevated  = isOnPlatform(targetEnemyPos, terrain);
+    if (shooterElevated && !targetElevated) hitMod += 20;
     const targetNum = Math.min(100, Math.max(5, per + hitMod));
     const roll = d100();
     const hit = roll <= targetNum;
@@ -1531,6 +1673,7 @@ export default function MissionSystem({ onNavigate }) {
     if (rangeMod !== 0) modParts.push(`${fmt(rangeMod)} ${rangeBand}`);
     if (aiming && mode === 'single') modParts.push('+20 Aim');
     if (mode === 'full') modParts.push('−10 FA');
+    if (shooterElevated && !targetElevated) modParts.push('+20 Elevation');
     const modBreakdown = modParts.length ? ` [${modParts.join(', ')}]` : '';
     const netStr = hitMod > 0 ? `+${hitMod}` : hitMod < 0 ? `${hitMod}` : '±0';
 
@@ -1670,12 +1813,17 @@ export default function MissionSystem({ onNavigate }) {
         for (let h = 0; h < totalHitsOnTarget; h++) {
           if (newEnemyWounds[targetIdx] <= 0) break;
           const loc     = subsequentHitLoc(firstLoc, h);
+          const hitLabel = totalHitsOnTarget > 1 ? `Hit ${h + 1}: ` : '';
+          // Cover save: lower-body hits stopped by partial cover
+          if (COVERED_LOCS.has(loc) && hasCoverVsShooter(targetEnemyPos, attackerPos, terrain)) {
+            log.push({ type: "system", text: `${hitLabel}${loc} — absorbed by cover! The barrier blocks the shot.` });
+            continue;
+          }
           const rawDmg  = rollDamageDice(activeWep.damage, char.stats.psyRating || 0);
           eventBridge.emit('combat-hit', { targetType: 'enemy', targetIndex: targetIdx });
           const effectiveArmor = Math.max(0, (target.armor || 0) - (activeWep.pen || 0));
           const tb       = Math.floor((target.stats?.toughness || 0) / 10);
           const finalDmg = Math.max(1, rawDmg - effectiveArmor - tb);
-          const hitLabel = totalHitsOnTarget > 1 ? `Hit ${h + 1}: ` : '';
           log.push({ type: "player", text: `${hitLabel}${loc}! ${rawDmg} dmg − Armor ${effectiveArmor}${tb ? ` − TB${tb}` : ''} = ${finalDmg}` });
           newEnemyWounds[targetIdx] = Math.max(0, newEnemyWounds[targetIdx] - finalDmg);
           setEnemyBodyWounds(prev => {
@@ -2089,17 +2237,30 @@ export default function MissionSystem({ onNavigate }) {
     const { modifier: rangeMod, band: rangeBand } = getRangeBand(manhattan, weaponRangeM);
     if (rangeMod === null) return false;
 
+    // LoS check — platforms block shots
+    const currentTerrain = terrainRef.current;
+    if (!hasLineOfSight(fromPos, targetPos, currentTerrain)) {
+      log.push({ type: "enemy", text: `${enemy.name} has no line of sight — platform blocking the shot.` });
+      return false;
+    }
+
     const rof       = parseRoF(weapon.rateOfFire);
     const mode      = rof.fullAuto > 0 ? 'full' : rof.semiAuto > 0 ? 'semi' : 'single';
     const rns       = enemy.stats.rangeSkill || 20;
-    const hitMod    = rangeMod + (isPinned ? -20 : 0) + (mode === 'full' ? -10 : 0);
+    const elevBonus = (isOnPlatform(fromPos, currentTerrain) && !isOnPlatform(targetPos, currentTerrain)) ? 20 : 0;
+    const hitMod    = rangeMod + (isPinned ? -20 : 0) + (mode === 'full' ? -10 : 0) + elevBonus;
     const targetNum = Math.max(5, Math.min(100, rns + hitMod));
     const roll      = d100();
     const hit       = roll <= targetNum;
     const modeLabel = mode === 'full' ? 'Full Auto' : mode === 'semi' ? 'Semi-Auto' : 'Single Shot';
     const rounds    = mode === 'full' ? (rof.fullAuto || 10) : mode === 'semi' ? (rof.semiAuto || 3) : 1;
     const animCount = mode === 'full' ? (rof.fullAuto || 1)  : mode === 'semi' ? (rof.semiAuto || 1)  : 1;
-    const modLabel  = hitMod !== 0 ? ` (${hitMod > 0 ? '+' : ''}${hitMod})` : '';
+    const modParts2 = [];
+    if (rangeMod  !== 0)    modParts2.push(`${rangeMod > 0 ? '+' : ''}${rangeMod} ${rangeBand}`);
+    if (isPinned)           modParts2.push('−20 Pinned');
+    if (mode === 'full')    modParts2.push('−10 FA');
+    if (elevBonus)          modParts2.push(`+${elevBonus} Elevation`);
+    const modLabel  = modParts2.length ? ` [${modParts2.join(', ')}]` : '';
 
     eventBridge.emit('combat-shot', {
       fromPos, toPos: targetPos, count: animCount,
@@ -2125,6 +2286,11 @@ export default function MissionSystem({ onNavigate }) {
       }
       if (roundHit) {
         const loc    = hitLocation(roundRoll);
+        // Cover save: lower-body hits stopped by partial cover
+        if (COVERED_LOCS.has(loc) && hasCoverVsShooter(targetPos, fromPos, currentTerrain)) {
+          log.push({ type: "player", text: `${target.name}'s ${loc} is protected by cover — shot stopped by barrier!` });
+          continue;
+        }
         const rawDmg = rollDamageDice(weapon.damage);
         let reactionBlocked = false;
         if (partyReactionsUsedRef.current[nearestIdx]) {
@@ -2282,8 +2448,10 @@ export default function MissionSystem({ onNavigate }) {
             const occupiedByEnemy = newEnemyPositions.some((e, i) => i !== actor.index && e.x === newX && e.y === newY);
             // Check if occupied by party member
             const occupiedByParty = partyPos.some(p => p.x === newX && p.y === newY);
-            
-            if (!occupiedByEnemy && !occupiedByParty) {
+            // Check if blocked by cover terrain
+            const blockedByCover  = isCoverTile(newX, newY, terrainRef.current);
+
+            if (!occupiedByEnemy && !occupiedByParty && !blockedByCover) {
               // Calculate distance to target from this position
               const newDist = Math.abs(newX - targetPos.x) + Math.abs(newY - targetPos.y);
               if (newDist < bestDist) {
