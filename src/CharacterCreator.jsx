@@ -167,40 +167,42 @@ export default function CharacterCreator({ onNavigate }) {
 
   // ── Render ───────────────────────────────────────────────────
   return (
-    <div style={{ minHeight:"100vh", background:"#0a0804", color:"#c8b89a", fontFamily:"'Cinzel',serif", position:"relative", overflowX:"hidden" }}>
+    <div style={{ minHeight:"100vh", background:"#06080f", color:"#8ab4d4", fontFamily:"'Cinzel',serif", position:"relative", overflowX:"hidden" }}>
       {/* Decorative grid overlay */}
-      <div style={{ position:"fixed", inset:0, backgroundImage:"repeating-linear-gradient(0deg,transparent,transparent 40px,rgba(139,90,43,0.03) 40px,rgba(139,90,43,0.03) 41px),repeating-linear-gradient(90deg,transparent,transparent 40px,rgba(139,90,43,0.03) 40px,rgba(139,90,43,0.03) 41px)", pointerEvents:"none", zIndex:0 }} />
+      <div style={{ position:"fixed", inset:0, backgroundImage:"repeating-linear-gradient(0deg,transparent,transparent 40px,rgba(30,80,140,0.06) 40px,rgba(30,80,140,0.06) 41px),repeating-linear-gradient(90deg,transparent,transparent 40px,rgba(30,80,140,0.06) 40px,rgba(30,80,140,0.06) 41px)", pointerEvents:"none", zIndex:0 }} />
+      {/* Blue radial glow */}
+      <div style={{ position:"fixed", inset:0, background:"radial-gradient(ellipse at 50% 0%, rgba(20,80,180,0.10) 0%, transparent 65%)", pointerEvents:"none", zIndex:0 }} />
       <style>{`
-        @import url('https://fonts.googleapis.com/css2?family=Cinzel:wght@400;600;700&family=Cinzel+Decorative:wght@700&family=IM+Fell+English&display=swap');
+        @import url('https://fonts.googleapis.com/css2?family=Cinzel:wght@400;600;700&family=Cinzel+Decorative:wght@700&family=Share+Tech+Mono&display=swap');
         *{box-sizing:border-box;}
-        .cc-btn{background:linear-gradient(180deg,#3a2510 0%,#1e1208 100%);color:#c8b89a;border:1px solid #5a3e1b;padding:8px 18px;font-family:'Cinzel',serif;font-size:11px;letter-spacing:1px;cursor:pointer;transition:all 0.2s;border-radius:0;}
-        .cc-btn:hover{border-color:#c09040;color:#f0d890;background:linear-gradient(180deg,#5a3510 0%,#2e1e08 100%);}
+        .cc-btn{background:linear-gradient(180deg,#0c1a2e 0%,#080f1c 100%);color:#8ab4d4;border:1px solid #1e3d5c;border-left:2px solid #1e4a7a;padding:8px 18px;font-family:'Cinzel',serif;font-size:11px;letter-spacing:1px;cursor:pointer;transition:all 0.2s;border-radius:0;}
+        .cc-btn:hover{border-color:#c8a84a;border-left-color:#c8a84a;color:#e8d090;background:linear-gradient(180deg,#101e30 0%,#0c1624 100%);}
         .cc-btn:disabled{opacity:0.4;cursor:not-allowed;}
-        .cc-btn-green{border-color:#4a7a4a;color:#6ee7b7;}
-        .cc-btn-green:hover{border-color:#6aaa6a;color:#90ffb0;background:linear-gradient(180deg,#1a3a1a 0%,#0e1e0e 100%);}
-        .cc-card{border:1px solid #3a2510;background:rgba(15,10,4,0.9);position:relative;margin-bottom:16px;}
-        .cc-card::before{content:'';position:absolute;inset:3px;border:1px solid rgba(90,62,27,0.2);pointer-events:none;}
-        .stat-row{display:flex;justify-content:space-between;align-items:center;padding:5px 0;border-bottom:1px solid #1a1005;}
+        .cc-btn-green{border-color:#1e5a3a;border-left-color:#2a7a50;color:#6ee7b7;}
+        .cc-btn-green:hover{border-color:#2a8a5a;border-left-color:#3aaa70;color:#90ffb0;background:linear-gradient(180deg,#0a1e14 0%,#060f0a 100%);}
+        .cc-card{border:1px solid #1e3d5c;background:rgba(8,15,28,0.9);position:relative;margin-bottom:16px;}
+        .cc-card::before{content:'';position:absolute;inset:3px;border:1px solid rgba(30,74,122,0.2);pointer-events:none;}
+        .stat-row{display:flex;justify-content:space-between;align-items:center;padding:5px 0;border-bottom:1px solid #0c1824;}
         .stat-row:last-child{border-bottom:none;}
-        .stat-label{font-size:9px;letter-spacing:2px;color:#6a5030;text-transform:uppercase;}
+        .stat-label{font-size:9px;letter-spacing:2px;color:#2e5a82;text-transform:uppercase;}
         .stat-val{font-size:16px;font-weight:600;font-family:'Cinzel',serif;}
-        .equip-item{padding:8px 12px;border-left:2px solid #5a3e1b;margin-bottom:8px;background:rgba(40,25,10,0.3);}
-        input[type=text]{background:#0f0a04;border:1px solid #3a2510;color:#c8b89a;padding:8px 12px;font-family:'Cinzel',serif;font-size:13px;width:100%;outline:none;letter-spacing:1px;}
-        input[type=text]:focus{border-color:#c09040;}
-        .class-card{border:1px solid #3a2510;background:rgba(15,10,4,0.85);padding:20px;cursor:pointer;transition:border-color 0.2s,background 0.2s;margin-bottom:16px;}
-        .class-card:hover{border-color:#c09040;background:rgba(25,15,5,0.95);}
-        .class-card.selected{border-color:#6ee7b7;background:rgba(10,25,15,0.8);}
+        .equip-item{padding:8px 12px;border-left:2px solid #1e4a7a;margin-bottom:8px;background:rgba(10,20,40,0.4);}
+        input[type=text]{background:#060d18;border:1px solid #1e3d5c;color:#8ab4d4;padding:8px 12px;font-family:'Cinzel',serif;font-size:13px;width:100%;outline:none;letter-spacing:1px;}
+        input[type=text]:focus{border-color:#c8a84a;}
+        .class-card{border:1px solid #1e3d5c;background:rgba(8,15,28,0.85);padding:20px;cursor:pointer;transition:border-color 0.2s,background 0.2s;margin-bottom:16px;border-left:3px solid #1e4a7a;}
+        .class-card:hover{border-color:#c8a84a;border-left-color:#c8a84a;background:rgba(12,20,36,0.95);}
+        .class-card.selected{border-color:#2a8a5a;border-left-color:#3aaa70;background:rgba(8,20,14,0.8);}
       `}</style>
 
       <div style={{ maxWidth:780, margin:"0 auto", padding:"24px 16px", position:"relative", zIndex:1 }}>
 
         {/* HEADER */}
         <div style={{ marginBottom:16 }}>
-          <button className="cc-btn" onClick={() => onNavigate("home")}>← Main Menu</button>
+          <button className="cc-btn" onClick={() => onNavigate("home")}>← Command</button>
         </div>
-        <div style={{ textAlign:"center", marginBottom:28, borderBottom:"1px solid #3a2510", paddingBottom:16 }}>
-          <div style={{ fontFamily:"'Cinzel Decorative',serif", fontSize:22, color:"#c09040", letterSpacing:5 }}>PERSONNEL DEPLOYMENT</div>
-          <div style={{ fontFamily:"'IM Fell English',serif", fontSize:12, color:"#6a5030", letterSpacing:3, marginTop:4 }}>
+        <div style={{ textAlign:"center", marginBottom:28, borderBottom:"1px solid #1e3d5c", paddingBottom:16 }}>
+          <div style={{ fontFamily:"'Cinzel Decorative',serif", fontSize:22, color:"#c8a84a", letterSpacing:5 }}>PERSONNEL DEPLOYMENT</div>
+          <div style={{ fontFamily:"'Share Tech Mono',monospace", fontSize:11, color:"#2e5a82", letterSpacing:3, marginTop:6 }}>
             {step === "class" ? "Select Operative Class" : step === "build" ? `Reviewing — ${charClass}` : "Operative Registered"}
           </div>
         </div>
@@ -208,26 +210,26 @@ export default function CharacterCreator({ onNavigate }) {
         {/* ── STEP 1: CLASS SELECTION ── */}
         {step === "class" && (
           <>
-            <div style={{ fontFamily:"'IM Fell English',serif", fontSize:13, color:"#8a7050", marginBottom:20, lineHeight:1.6, fontStyle:"italic", textAlign:"center" }}>
-              Choose the operative's combat designation. Stats are generated from class baselines plus random variance.
+            <div style={{ fontFamily:"'Share Tech Mono',monospace", fontSize:11, color:"#2e5a82", marginBottom:20, lineHeight:1.6, textAlign:"center" }}>
+              Choose the operative&apos;s combat designation. Stats are generated from class baselines plus random variance.
             </div>
 
             {/* Veteran Infantry */}
             <div className="class-card" onClick={() => selectClass("Veteran Infantry")}>
-              <div style={{ fontFamily:"'Cinzel Decorative',serif", fontSize:16, color:"#c09040", letterSpacing:2, marginBottom:6 }}>VETERAN INFANTRY</div>
-              <div style={{ fontFamily:"'IM Fell English',serif", fontSize:12, color:"#9a8060", lineHeight:1.6, marginBottom:14 }}>
+              <div style={{ fontFamily:"'Cinzel Decorative',serif", fontSize:16, color:"#c8a84a", letterSpacing:2, marginBottom:6 }}>VETERAN INFANTRY</div>
+              <div style={{ fontFamily:"'Share Tech Mono',monospace", fontSize:11, color:"#4a7a9a", lineHeight:1.6, marginBottom:14 }}>
                 Years of front-line service in the Battalions. Hardened combatants trained in assault and suppression tactics. High melee and ranged baseline with resilient constitution.
               </div>
               <div style={{ display:"grid", gridTemplateColumns:"repeat(3,1fr)", gap:8, marginBottom:14 }}>
                 {[["MELEE",  "25+2D10"],["RANGE",  "35+2D10"],["STR",   "25+2D10"],
                   ["TOUGH",  "25+2D10"],["PER",    "25+2D10"],["WILLPWR","25+2D10"]].map(([k,v]) => (
-                  <div key={k} style={{ background:"rgba(40,25,10,0.4)", padding:"6px 10px", borderLeft:"2px solid #5a3e1b" }}>
-                    <div style={{ fontSize:8, color:"#6a5030", letterSpacing:2 }}>{k}</div>
-                    <div style={{ fontSize:12, color:"#c8b89a", fontFamily:"'Cinzel',serif" }}>{v}</div>
+                  <div key={k} style={{ background:"rgba(10,20,40,0.5)", padding:"6px 10px", borderLeft:"2px solid #1e4a7a" }}>
+                    <div style={{ fontSize:8, color:"#2e5a82", letterSpacing:2 }}>{k}</div>
+                    <div style={{ fontSize:12, color:"#8ab4d4", fontFamily:"'Cinzel',serif" }}>{v}</div>
                   </div>
                 ))}
               </div>
-              <div style={{ fontSize:10, color:"#6a5030", letterSpacing:1 }}>
+              <div style={{ fontSize:10, color:"#2e5a82", letterSpacing:1 }}>
                 Equipment: Assault Rifle or LMG · Phase Blade or Shield Arm · Flak Vest or Tech Shield Vest
               </div>
             </div>
@@ -235,19 +237,19 @@ export default function CharacterCreator({ onNavigate }) {
             {/* Adept */}
             <div className="class-card" onClick={() => selectClass("Adept")}>
               <div style={{ fontFamily:"'Cinzel Decorative',serif", fontSize:16, color:"#9080d0", letterSpacing:2, marginBottom:6 }}>ADEPT</div>
-              <div style={{ fontFamily:"'IM Fell English',serif", fontSize:12, color:"#9a8060", lineHeight:1.6, marginBottom:14 }}>
+              <div style={{ fontFamily:"'Share Tech Mono',monospace", fontSize:11, color:"#4a7a9a", lineHeight:1.6, marginBottom:14 }}>
                 Graduates of the Order of Seers Academy. Rare psychic operatives with devastating mental powers. Fragile in conventional combat — lethal at range and support.
               </div>
               <div style={{ display:"grid", gridTemplateColumns:"repeat(3,1fr)", gap:8, marginBottom:14 }}>
                 {[["PERCEPT","40+2D10"],["WILLPWR","35+2D10"],["INTEL", "25+2D10"],
                   ["PSY",    "30+2D10"],["MELEE",  "20+2D10"],["TOUGH", "20+2D10"]].map(([k,v]) => (
-                  <div key={k} style={{ background:"rgba(30,20,50,0.4)", padding:"6px 10px", borderLeft:"2px solid #6050a0" }}>
+                  <div key={k} style={{ background:"rgba(20,15,40,0.5)", padding:"6px 10px", borderLeft:"2px solid #6050a0" }}>
                     <div style={{ fontSize:8, color:"#6050a0", letterSpacing:2 }}>{k}</div>
-                    <div style={{ fontSize:12, color:"#c8b89a", fontFamily:"'Cinzel',serif" }}>{v}</div>
+                    <div style={{ fontSize:12, color:"#8ab4d4", fontFamily:"'Cinzel',serif" }}>{v}</div>
                   </div>
                 ))}
               </div>
-              <div style={{ fontSize:10, color:"#6a5030", letterSpacing:1 }}>
+              <div style={{ fontSize:10, color:"#2e5a82", letterSpacing:1 }}>
                 Equipment: Phase Blade · Aetheric Aperture · Order Robes
               </div>
             </div>
@@ -259,7 +261,7 @@ export default function CharacterCreator({ onNavigate }) {
           <>
             {/* Name */}
             <div className="cc-card" style={{ padding:"16px 20px", marginBottom:16 }}>
-              <div style={{ fontSize:9, letterSpacing:2, color:"#6a5030", textTransform:"uppercase", marginBottom:8 }}>Operative Designation</div>
+              <div style={{ fontSize:9, letterSpacing:2, color:"#2e5a82", textTransform:"uppercase", marginBottom:8, fontFamily:"'Share Tech Mono',monospace" }}>Operative Designation</div>
               <div style={{ display:"flex", gap:10, alignItems:"center" }}>
                 <input
                   type="text"
@@ -275,19 +277,19 @@ export default function CharacterCreator({ onNavigate }) {
             {/* Stats */}
             <div className="cc-card" style={{ padding:"16px 20px", marginBottom:16 }}>
               <div style={{ display:"flex", justifyContent:"space-between", alignItems:"center", marginBottom:12 }}>
-                <div style={{ fontSize:9, letterSpacing:2, color:"#6a5030", textTransform:"uppercase" }}>Characteristics</div>
+                <div style={{ fontSize:9, letterSpacing:2, color:"#2e5a82", textTransform:"uppercase", fontFamily:"'Share Tech Mono',monospace" }}>Characteristics</div>
                 <button className="cc-btn" onClick={rerollStats}>↺ Reroll All</button>
               </div>
               <div style={{ display:"grid", gridTemplateColumns:"1fr 1fr", gap:"0 24px" }}>
                 {STAT_META.map(({ key, label, desc }) => {
                   if (key === "psyRating" && charClass !== "Adept") return null;
                   const val = stats[key];
-                  const color = val >= 40 ? "#6ee7b7" : val >= 30 ? "#c8b89a" : val <= 22 ? "#f87171" : "#e2d5b0";
+                  const color = val >= 40 ? "#6ee7b7" : val >= 30 ? "#8ab4d4" : val <= 22 ? "#f87171" : "#a8c8e0";
                   return (
                     <div key={key} className="stat-row">
                       <div>
                         <div className="stat-label">{label}</div>
-                        <div style={{ fontSize:9, color:"#3a2a10", letterSpacing:1 }}>{desc}</div>
+                        <div style={{ fontSize:9, color:"#1e3d5c", letterSpacing:1 }}>{desc}</div>
                       </div>
                       <div className="stat-val" style={{ color }}>{val}</div>
                     </div>
@@ -295,14 +297,14 @@ export default function CharacterCreator({ onNavigate }) {
                 })}
               </div>
               {/* Secondary stats */}
-              <div style={{ marginTop:12, paddingTop:10, borderTop:"1px solid #2a1808" }}>
-                <div style={{ fontSize:9, letterSpacing:2, color:"#6a5030", textTransform:"uppercase", marginBottom:6 }}>Derived</div>
+              <div style={{ marginTop:12, paddingTop:10, borderTop:"1px solid #0c1824" }}>
+                <div style={{ fontSize:9, letterSpacing:2, color:"#2e5a82", textTransform:"uppercase", marginBottom:6, fontFamily:"'Share Tech Mono',monospace" }}>Derived</div>
                 <div style={{ display:"flex", gap:12, flexWrap:"wrap" }}>
                   {[["Wounds",     wounds],
                     ["Fate Pts",   charClass === "Adept" ? 3 : 2],
                     ["Insanity",   0],
                     ["Corruption", 0]].map(([k,v]) => (
-                    <span key={k} style={{ border:"1px solid #4a3010", background:"rgba(90,62,27,0.2)", padding:"4px 10px", fontSize:10, color:"#9a7840" }}>
+                    <span key={k} style={{ border:"1px solid #1e4a7a", background:"rgba(30,74,122,0.15)", padding:"4px 10px", fontSize:10, color:"#4a8aaa", fontFamily:"'Share Tech Mono',monospace" }}>
                       {k}: {v}
                     </span>
                   ))}
@@ -312,15 +314,15 @@ export default function CharacterCreator({ onNavigate }) {
 
             {/* Equipment */}
             <div className="cc-card" style={{ padding:"16px 20px", marginBottom:20 }}>
-              <div style={{ fontSize:9, letterSpacing:2, color:"#6a5030", textTransform:"uppercase", marginBottom:10 }}>Starting Equipment</div>
+              <div style={{ fontSize:9, letterSpacing:2, color:"#2e5a82", textTransform:"uppercase", marginBottom:10, fontFamily:"'Share Tech Mono',monospace" }}>Starting Equipment</div>
               {equipment.map((item) => (
                 <div key={item.id} className="equip-item">
-                  <div style={{ fontFamily:"'Cinzel',serif", fontSize:12, color:"#c8b89a", marginBottom:2 }}>{item.name}</div>
-                  <div style={{ fontFamily:"'IM Fell English',serif", fontSize:11, color:"#8a7050", fontStyle:"italic" }}>{item.desc}</div>
+                  <div style={{ fontFamily:"'Cinzel',serif", fontSize:12, color:"#8ab4d4", marginBottom:2 }}>{item.name}</div>
+                  <div style={{ fontFamily:"'Share Tech Mono',monospace", fontSize:10, color:"#2e5a82" }}>{item.desc}</div>
                 </div>
               ))}
               {charClass === "Veteran Infantry" && (
-                <div style={{ fontSize:9, color:"#5a4020", marginTop:8, fontFamily:"'IM Fell English',serif", fontStyle:"italic" }}>
+                <div style={{ fontSize:9, color:"#1e4a7a", marginTop:8, fontFamily:"'Share Tech Mono',monospace" }}>
                   ↺ Rerolling stats re-randomises equipment loadout.
                 </div>
               )}
@@ -329,7 +331,7 @@ export default function CharacterCreator({ onNavigate }) {
             {/* Action buttons */}
             <div style={{ display:"flex", gap:12, flexWrap:"wrap" }}>
               <button className="cc-btn cc-btn-green" onClick={saveCharacter}>
-                ✦ Register Operative
+                ⬡ Register Operative
               </button>
               <button className="cc-btn" onClick={() => setStep("class")}>
                 ← Change Class
@@ -340,14 +342,14 @@ export default function CharacterCreator({ onNavigate }) {
 
         {/* ── STEP 3: DONE ── */}
         {step === "done" && (
-          <div style={{ border:"1px solid #4a7a4a", background:"rgba(20,40,20,0.6)", padding:28, textAlign:"center" }}>
+          <div style={{ border:"1px solid #1e5a3a", background:"rgba(8,20,14,0.7)", padding:28, textAlign:"center" }}>
             <div style={{ fontFamily:"'Cinzel Decorative',serif", fontSize:20, color:"#6ee7b7", letterSpacing:4, marginBottom:10 }}>
               OPERATIVE REGISTERED
             </div>
-            <div style={{ fontFamily:"'IM Fell English',serif", fontSize:14, color:"#80b080", marginBottom:8 }}>
+            <div style={{ fontFamily:"'Share Tech Mono',monospace", fontSize:14, color:"#6aaa8a", marginBottom:8 }}>
               {name}
             </div>
-            <div style={{ fontFamily:"'IM Fell English',serif", fontSize:12, color:"#6a8060", marginBottom:24, fontStyle:"italic" }}>
+            <div style={{ fontFamily:"'Share Tech Mono',monospace", fontSize:11, color:"#2e5a82", marginBottom:24 }}>
               {charClass} · {wounds} Wounds
             </div>
             <div style={{ display:"flex", gap:12, justifyContent:"center", flexWrap:"wrap" }}>
@@ -358,14 +360,14 @@ export default function CharacterCreator({ onNavigate }) {
                 View Roster
               </button>
               <button className="cc-btn" onClick={() => onNavigate("home")}>
-                Main Menu
+                Command
               </button>
             </div>
           </div>
         )}
 
-        <div style={{ textAlign:"center", padding:"24px 0 8px", fontSize:9, color:"#2a1808", letterSpacing:3 }}>
-          ✦ IN SERVICE TO THE ORDER ✦
+        <div style={{ textAlign:"center", padding:"24px 0 8px", fontSize:9, color:"#1e3d5c", letterSpacing:3, fontFamily:"'Share Tech Mono',monospace" }}>
+          ⬡ IN SERVICE TO THE COUNCIL ⬡
         </div>
       </div>
     </div>
