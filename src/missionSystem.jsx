@@ -6,9 +6,9 @@ import PhaserGame from "./phaser/PhaserGame.jsx";
 import { eventBridge } from "./phaser/EventBridge.js";
 
 const TIER_COLOR = {
-  Routine:   "#6a8060",
-  Dangerous: "#a07030",
-  Deadly:    "#a03030",
+  Routine:   "#4a8060",
+  Dangerous: "#c8a84a",
+  Deadly:    "#c85050",
 };
 
 const TIER_ORDER = { Routine: 0, Dangerous: 1, Deadly: 2 };
@@ -297,12 +297,12 @@ function resolveCheck(statValue, difficulty) {
   return { roll, passed, margin, extreme };
 }
 
-export default function MissionSystem({ onNavigate }) {
-  const [phase, setPhase]               = useState("select_character");
+export default function MissionSystem({ onNavigate, initialEncounter, initialParty, onCombatEnd, skipSelectionPhases }) {
+  const [phase, setPhase]               = useState(skipSelectionPhases ? "loading_combat" : "select_character");
   const [characters, setCharacters]     = useState(() => JSON.parse(localStorage.getItem("dhgen_roster") || "[]"));
-  
+
   // Party state - array of selected characters
-  const [party, setParty] = useState([]);
+  const [party, setParty] = useState(() => initialParty || []);
   const [selectedChar, setSelectedChar] = useState(null);
   const [currentPartyMember, setCurrentPartyMember] = useState(0); // Index of party member acting
 
@@ -368,6 +368,16 @@ export default function MissionSystem({ onNavigate }) {
   const [terrain, setTerrain] = useState([]); // terrain pieces: platforms + cover barriers
   const terrainRef = useRef([]);
   useEffect(() => { terrainRef.current = terrain; }, [terrain]);
+
+  // ── External combat auto-start (from campaign exploration) ──────────────
+  const externalCombatStarted = useRef(false);
+  useEffect(() => {
+    if (skipSelectionPhases && initialEncounter && initialParty && !externalCombatStarted.current) {
+      externalCombatStarted.current = true;
+      startExternalCombat();
+    }
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [skipSelectionPhases, initialEncounter, initialParty]);
 
   // Initiative system
   const [initiativeOrder, setInitiativeOrder] = useState([]); // Array of {type: 'party'|'enemy', index: number, initiative: number}
@@ -438,6 +448,17 @@ export default function MissionSystem({ onNavigate }) {
     terrain,
   } : null;
 
+  // ── PHASE: LOADING EXTERNAL COMBAT ──────────────────────────
+  if (phase === "loading_combat") {
+    return (
+      <Screen title="Deploying Forces" subtitle="Initializing tactical grid...">
+        <div style={{ textAlign: "center", padding: 60, fontFamily: "'Share Tech Mono', monospace", color: "#2e5a82", fontSize: 13 }}>
+          Preparing combat zone...
+        </div>
+      </Screen>
+    );
+  }
+
   // ── PHASE: SELECT PARTY ──────────────────────────────────────
   if (phase === "select_character") {
     const saved = characters.filter(Boolean);
@@ -447,10 +468,10 @@ export default function MissionSystem({ onNavigate }) {
     const isInParty = (char) => party.some(p => p.name === char.name && p.origin === char.origin);
     
     return (
-      <Screen onNavigate={onNavigate} title="Deploy Party" subtitle="Select 1-4 Acolytes for the mission">
+      <Screen onNavigate={onNavigate} title="Assemble Strike Team" subtitle="Select 1-4 Operatives for the mission">
         {saved.length === 0 ? (
-          <div style={{ textAlign: "center", padding: 40, fontFamily: "'IM Fell English', serif", color: "#5a4020", fontSize: 14 }}>
-            No Acolytes on file. Create a character first.
+          <div style={{ textAlign: "center", padding: 40, fontFamily: "'Share Tech Mono', monospace", color: "#2e5a82", fontSize: 13 }}>
+            No Operatives on file. Create a character first.
           </div>
         ) : (
           <>
@@ -477,13 +498,13 @@ export default function MissionSystem({ onNavigate }) {
             )}
             
             {liveCharacters.length === 0 && kiaCharacters.length > 0 && (
-              <div style={{ textAlign: "center", padding: 20, fontFamily: "'IM Fell English', serif", color: "#5a4020", fontSize: 13, marginBottom: 20, border: "1px solid #3a2510", background: "rgba(15,10,4,0.85)" }}>
-                No living Acolytes available for deployment.
+              <div style={{ textAlign: "center", padding: 20, fontFamily: "'Share Tech Mono', monospace", color: "#2e5a82", fontSize: 12, marginBottom: 20, border: "1px solid #1e3d5c", background: "rgba(8,15,28,0.9)" }}>
+                No living Operatives available for deployment.
               </div>
             )}
             
-            <div style={{ fontSize: 10, letterSpacing: 3, color: "#6a5030", textTransform: "uppercase", marginBottom: 10, fontFamily: "Cinzel" }}>
-              — Available Acolytes (click to add) —
+            <div style={{ fontSize: 10, letterSpacing: 3, color: "#2e5a82", textTransform: "uppercase", marginBottom: 10, fontFamily: "'Share Tech Mono', monospace" }}>
+              — Available Operatives (click to add) —
             </div>
             
             {liveCharacters.map((char) => {
@@ -499,23 +520,23 @@ export default function MissionSystem({ onNavigate }) {
                     setParty([...party, { ...char, rosterIndex: originalIdx }]);
                   }
                 }}
-                  style={{ 
-                    border: inParty ? "2px solid #4a7a4a" : "1px solid #3a2510", 
-                    background: inParty ? "rgba(20,40,20,0.5)" : "rgba(15,10,4,0.85)", 
-                    padding: "14px 18px", 
+                  style={{
+                    border: inParty ? "2px solid #2a7a5a" : "1px solid #1e3d5c",
+                    background: inParty ? "rgba(8,20,14,0.7)" : "rgba(8,15,28,0.9)",
+                    padding: "14px 18px",
                     marginBottom: 10, 
                     cursor: party.length < 4 || inParty ? "pointer" : "not-allowed",
                     opacity: party.length >= 4 && !inParty ? 0.5 : 1,
                     transition: "border-color 0.2s" 
                   }}
-                  onMouseEnter={e => { if (party.length < 4 || inParty) e.currentTarget.style.borderColor = "#c09040"; }}
-                  onMouseLeave={e => e.currentTarget.style.borderColor = inParty ? "#4a7a4a" : "#3a2510"}>
+                  onMouseEnter={e => { if (party.length < 4 || inParty) e.currentTarget.style.borderColor = "#c8a84a"; }}
+                  onMouseLeave={e => e.currentTarget.style.borderColor = inParty ? "#2a7a5a" : "#1e3d5c"}>
                   <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
                     <div>
                       <div style={{ fontFamily: "'Cinzel Decorative', serif", fontSize: 15, color: inParty ? "#6ee7b7" : "#d4a850" }}>
                         {inParty && "✓ "}{char.name}
                       </div>
-                      <div style={{ fontFamily: "'IM Fell English', serif", fontSize: 12, color: "#8a7050", marginTop: 3 }}>
+                      <div style={{ fontFamily: "'Share Tech Mono', monospace", fontSize: 11, color: "#2e5a82", marginTop: 3 }}>
                         {char.class || char.career || 'Operative'}
                       </div>
                       <div style={{ marginTop: 6, display: "flex", gap: 8, flexWrap: "wrap" }}>
@@ -540,9 +561,9 @@ export default function MissionSystem({ onNavigate }) {
                   const originalIdx = characters.findIndex(c => c && c.name === char.name && c.origin === char.origin);
                   return (
                     <div key={`kia-${originalIdx}`}
-                      style={{ border: "1px solid #3a2510", background: "rgba(30,10,10,0.4)", padding: "14px 18px", marginBottom: 10, cursor: "not-allowed", opacity: 0.6 }}>
-                      <div style={{ fontFamily: "'Cinzel Decorative', serif", fontSize: 15, color: "#704040" }}>{char.name}</div>
-                      <div style={{ fontFamily: "'IM Fell English', serif", fontSize: 12, color: "#6a5040", marginTop: 3 }}>
+                      style={{ border: "1px solid #3a1a1a", background: "rgba(30,10,10,0.4)", padding: "14px 18px", marginBottom: 10, cursor: "not-allowed", opacity: 0.6 }}>
+                      <div style={{ fontFamily: "'Cinzel Decorative', serif", fontSize: 15, color: "#804040" }}>{char.name}</div>
+                      <div style={{ fontFamily: "'Share Tech Mono', monospace", fontSize: 11, color: "#5a3030", marginTop: 3 }}>
                         {char.class || char.career || 'Operative'}
                       </div>
                       <div style={{ marginTop: 6, display: "flex", gap: 8, flexWrap: "wrap" }}>
@@ -566,8 +587,8 @@ export default function MissionSystem({ onNavigate }) {
     return (
       <Screen onNavigate={onNavigate} title="Select Mission" subtitle={`Deploying: ${party.map(p => p.name).join(", ")}`} onBack={() => { setPhase("select_character"); setEncounter(null); }}>
         {/* Party Summary */}
-        <div style={{ border: "1px solid #3a2510", background: "rgba(15,10,4,0.85)", padding: "12px 16px", marginBottom: 20 }}>
-          <div style={{ fontFamily: "'Cinzel', serif", fontSize: 10, color: "#6a5030", letterSpacing: 2, marginBottom: 8 }}>PARTY MEMBERS</div>
+        <div style={{ border: "1px solid #1e3d5c", background: "rgba(8,15,28,0.9)", padding: "12px 16px", marginBottom: 20 }}>
+          <div style={{ fontFamily: "'Share Tech Mono', monospace", fontSize: 10, color: "#2e5a82", letterSpacing: 2, marginBottom: 8 }}>STRIKE TEAM</div>
           <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
             {party.map((p, i) => (
               <span key={i} style={{ border: "1px solid #4a3010", background: "rgba(90,62,27,0.2)", padding: "4px 10px", fontSize: 10, color: "#9a7840" }}>
@@ -584,20 +605,20 @@ export default function MissionSystem({ onNavigate }) {
             </div>
             {MISSIONS.filter(m => m.tier === tier).map(mission => (
               <div key={mission.id} onClick={() => { setSelectedMission(mission); setPhase("briefing"); }}
-                style={{ border: "1px solid #3a2510", background: "rgba(15,10,4,0.85)", padding: "14px 18px", marginBottom: 10, cursor: "pointer", transition: "border-color 0.2s" }}
+                style={{ border: "1px solid #1e3d5c", background: "rgba(8,15,28,0.9)", padding: "14px 18px", marginBottom: 10, cursor: "pointer", transition: "border-color 0.2s" }}
                 onMouseEnter={e => e.currentTarget.style.borderColor = TIER_COLOR[tier]}
-                onMouseLeave={e => e.currentTarget.style.borderColor = "#3a2510"}>
+                onMouseLeave={e => e.currentTarget.style.borderColor = "#1e3d5c"}>
                 <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start" }}>
                   <div>
-                    <div style={{ fontFamily: "'Cinzel', serif", fontSize: 13, color: "#c8b89a", letterSpacing: 1 }}>{mission.name}</div>
-                    <div style={{ fontFamily: "'IM Fell English', serif", fontSize: 11, color: "#6a5030", marginTop: 2 }}>{mission.type} · {mission.checks.length} checks</div>
+                    <div style={{ fontFamily: "'Cinzel', serif", fontSize: 13, color: "#8ab4d4", letterSpacing: 1 }}>{mission.name}</div>
+                    <div style={{ fontFamily: "'Share Tech Mono', monospace", fontSize: 10, color: "#2e5a82", marginTop: 2 }}>{mission.type} · {mission.checks.length} checks</div>
                   </div>
                   <div style={{ textAlign: "right" }}>
-                    <div style={{ fontSize: 10, color: "#6a8060", fontFamily: "Cinzel" }}>{mission.xpSuccess} XP</div>
-                    <div style={{ fontSize: 10, color: "#5a4020", fontFamily: "Cinzel" }}>fail: {mission.xpFailure} XP</div>
+                    <div style={{ fontSize: 10, color: "#4a8060", fontFamily: "'Share Tech Mono', monospace" }}>{mission.xpSuccess} XP</div>
+                    <div style={{ fontSize: 10, color: "#2e5a82", fontFamily: "'Share Tech Mono', monospace" }}>fail: {mission.xpFailure} XP</div>
                   </div>
                 </div>
-                <div style={{ fontFamily: "'IM Fell English', serif", fontSize: 12, color: "#7a6040", marginTop: 8, lineHeight: 1.5 }}>
+                <div style={{ fontFamily: "'Share Tech Mono', monospace", fontSize: 10, color: "#2e5a82", marginTop: 8, lineHeight: 1.5 }}>
                   {mission.flavor}
                 </div>
               </div>
@@ -624,8 +645,8 @@ export default function MissionSystem({ onNavigate }) {
     return (
       <Screen onNavigate={onNavigate} title={selectedMission.name} subtitle={`${selectedMission.type} · ${selectedMission.tier}`} onBack={() => { setPhase("select_mission"); setEncounter(null); }}>
         {/* Party Display */}
-        <div style={{ border: "1px solid #3a2510", background: "rgba(15,10,4,0.85)", padding: "12px 16px", marginBottom: 16 }}>
-          <div style={{ fontFamily: "'Cinzel', serif", fontSize: 10, color: "#6a5030", letterSpacing: 2, marginBottom: 8 }}>DEPLOYED PARTY</div>
+        <div style={{ border: "1px solid #1e3d5c", background: "rgba(8,15,28,0.9)", padding: "12px 16px", marginBottom: 16 }}>
+          <div style={{ fontFamily: "'Share Tech Mono', monospace", fontSize: 10, color: "#2e5a82", letterSpacing: 2, marginBottom: 8 }}>DEPLOYED TEAM</div>
           <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
             {party.map((p, i) => (
               <span key={i} style={{ border: i === 0 ? "1px solid #6a8060" : "1px solid #4a3010", background: i === 0 ? "rgba(40,80,40,0.2)" : "rgba(90,62,27,0.2)", padding: "4px 10px", fontSize: 10, color: i === 0 ? "#80c080" : "#9a7840" }}>
@@ -635,52 +656,52 @@ export default function MissionSystem({ onNavigate }) {
           </div>
         </div>
         
-        <div style={{ border: "1px solid #3a2510", background: "rgba(15,10,4,0.85)", padding: "16px 20px", marginBottom: 16 }}>
-          <div style={{ fontFamily: "'IM Fell English', serif", fontStyle: "italic", fontSize: 14, color: "#b8a070", lineHeight: 1.6, marginBottom: 16 }}>
+        <div style={{ border: "1px solid #1e3d5c", background: "rgba(8,15,28,0.9)", padding: "16px 20px", marginBottom: 16 }}>
+          <div style={{ fontFamily: "'Share Tech Mono', monospace", fontSize: 11, color: "#4a7a9a", lineHeight: 1.7, marginBottom: 16 }}>
             {selectedMission.flavor}
           </div>
-          <div style={{ fontSize: 9, letterSpacing: 2, color: "#6a5030", textTransform: "uppercase", marginBottom: 10 }}>Anticipated Checks</div>
+          <div style={{ fontSize: 9, letterSpacing: 2, color: "#2e5a82", textTransform: "uppercase", marginBottom: 10, fontFamily: "'Share Tech Mono', monospace" }}>Anticipated Checks</div>
           {selectedMission.checks.map((check, i) => (
-            <div key={i} style={{ display: "flex", justifyContent: "space-between", padding: "6px 0", borderBottom: "1px solid #2a1808", fontFamily: "'IM Fell English', serif", fontSize: 12 }}>
-              <span style={{ color: "#a89070" }}>{check.label}</span>
-              <span style={{ color: "#6a5030" }}>{check.stat} vs {check.difficulty}{check.isCombat ? " ⚔" : ""}</span>
+            <div key={i} style={{ display: "flex", justifyContent: "space-between", padding: "6px 0", borderBottom: "1px solid #0c1824", fontFamily: "'Share Tech Mono', monospace", fontSize: 11 }}>
+              <span style={{ color: "#6a90b0" }}>{check.label}</span>
+              <span style={{ color: "#2e5a82" }}>{check.stat} vs {check.difficulty}{check.isCombat ? " ⚔" : ""}</span>
             </div>
           ))}
-          <div style={{ marginTop: 16, display: "flex", justifyContent: "space-between", fontSize: 11, fontFamily: "Cinzel", color: "#6a5030" }}>
-            <span>Success: <span style={{ color: "#6a8060" }}>{selectedMission.xpSuccess} XP</span></span>
-            <span>Failure: <span style={{ color: "#a05030" }}>{selectedMission.xpFailure} XP</span></span>
+          <div style={{ marginTop: 16, display: "flex", justifyContent: "space-between", fontSize: 11, fontFamily: "'Share Tech Mono', monospace", color: "#2e5a82" }}>
+            <span>Success: <span style={{ color: "#4a8060" }}>{selectedMission.xpSuccess} XP</span></span>
+            <span>Failure: <span style={{ color: "#2e5a82" }}>{selectedMission.xpFailure} XP</span></span>
           </div>
         </div>
         
         {/* ENCOUNTER PREVIEW */}
         {encounter && (
-          <div style={{ border: "1px solid #5a2020", background: "rgba(40,15,15,0.6)", padding: "16px 20px", marginBottom: 16 }}>
-            <div style={{ fontSize: 9, letterSpacing: 2, color: "#c05050", textTransform: "uppercase", marginBottom: 10 }}>⚠ Hostiles Detected</div>
-            <div style={{ fontFamily: "'Cinzel', serif", fontSize: 10, color: "#8a5040", marginBottom: 12, letterSpacing: 1 }}>Environment: {environment}</div>
+          <div style={{ border: "1px solid #3a1a1a", background: "rgba(28,10,10,0.7)", padding: "16px 20px", marginBottom: 16 }}>
+            <div style={{ fontSize: 9, letterSpacing: 2, color: "#c05050", textTransform: "uppercase", marginBottom: 10, fontFamily: "'Share Tech Mono', monospace" }}>⚠ Hostiles Detected</div>
+            <div style={{ fontFamily: "'Share Tech Mono', monospace", fontSize: 10, color: "#5a3030", marginBottom: 12, letterSpacing: 1 }}>Environment: {environment}</div>
             {encounter.enemies.map((enemy, i) => (
               <div key={i} style={{ padding: "10px 12px", background: "rgba(30,10,10,0.5)", marginBottom: 8, borderLeft: "2px solid #c05050" }}>
                 <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
-                  <span style={{ fontFamily: "'Cinzel', serif", fontSize: 13, color: "#d4a050" }}>{enemy.name}</span>
-                  <span style={{ fontSize: 10, color: "#a05050" }}>{enemy.wounds} Wounds</span>
+                  <span style={{ fontFamily: "'Cinzel', serif", fontSize: 13, color: "#c8a84a" }}>{enemy.name}</span>
+                  <span style={{ fontSize: 10, color: "#a05050", fontFamily: "'Share Tech Mono', monospace" }}>{enemy.wounds} Wounds</span>
                 </div>
-                <div style={{ fontFamily: "'IM Fell English', serif", fontSize: 11, color: "#7a5040", marginTop: 4, fontStyle: "italic" }}>
+                <div style={{ fontFamily: "'Share Tech Mono', monospace", fontSize: 10, color: "#5a3030", marginTop: 4 }}>
                   {enemy.description}
                 </div>
-                <div style={{ fontFamily: "'IM Fell English', serif", fontSize: 10, color: "#6a4030", marginTop: 6 }}>
+                <div style={{ fontFamily: "'Share Tech Mono', monospace", fontSize: 10, color: "#4a2828", marginTop: 6 }}>
                   MEL {enemy.stats.meleeSkill} | RNG {enemy.stats.rangeSkill} | STR {enemy.stats.strength} | TOU {enemy.stats.toughness} | Armor {enemy.armor}
                 </div>
               </div>
             ))}
-            <div style={{ display: "flex", justifyContent: "space-between", marginTop: 12, paddingTop: 10, borderTop: "1px solid #3a1515", fontSize: 11, fontFamily: "Cinzel" }}>
+            <div style={{ display: "flex", justifyContent: "space-between", marginTop: 12, paddingTop: 10, borderTop: "1px solid #3a1515", fontSize: 11, fontFamily: "'Share Tech Mono', monospace" }}>
               <span style={{ color: "#a05050" }}>Total Wounds: {encounter.totalWounds}</span>
-              <span style={{ color: "#c09040" }}>XP Value: {encounter.totalXP}</span>
+              <span style={{ color: "#c8a84a" }}>XP Value: {encounter.totalXP}</span>
             </div>
           </div>
         )}
         
         <div style={{ textAlign: "center" }}>
           <button onClick={() => startMission()} style={{ padding: "12px 32px", fontSize: 13, letterSpacing: 3, borderColor: TIER_COLOR[selectedMission.tier], color: TIER_COLOR[selectedMission.tier] }}>
-            ✦ Deploy Party ({party.length} Acolytes)
+            ⬡ Deploy Strike Team ({party.length} Operatives)
           </button>
         </div>
       </Screen>
@@ -694,8 +715,8 @@ export default function MissionSystem({ onNavigate }) {
     
     return (
       <Screen onNavigate={onNavigate} title="Skill Check" subtitle={`${currentCheck.label} - ${char.name}`} onBack={() => { setPhase("briefing"); setCurrentCheckIndex(0); }}>
-        <div style={{ border: "1px solid #3a2510", background: "rgba(15,10,4,0.85)", padding: "20px", marginBottom: 16, textAlign: "center" }}>
-          <div style={{ fontFamily: "'Cinzel Decorative', serif", fontSize: 14, color: "#c09040", marginBottom: 12, letterSpacing: 2 }}>
+        <div style={{ border: "1px solid #1e3d5c", background: "rgba(8,15,28,0.9)", padding: "20px", marginBottom: 16, textAlign: "center" }}>
+          <div style={{ fontFamily: "'Cinzel Decorative', serif", fontSize: 14, color: "#c8a84a", marginBottom: 12, letterSpacing: 2 }}>
             {currentCheck.label}
           </div>
           <div style={{ fontFamily: "'IM Fell English', serif", fontSize: 13, color: "#a89070", marginBottom: 16, fontStyle: "italic" }}>
@@ -731,7 +752,7 @@ export default function MissionSystem({ onNavigate }) {
         {/* OUTCOME BANNER */}
         <div style={{ border: `1px solid ${success ? "#4a7a4a" : "#7a3a1a"}`, background: success ? "rgba(20,40,20,0.6)" : "rgba(40,15,10,0.6)", padding: "14px 20px", marginBottom: 16, textAlign: "center" }}>
           <div style={{ fontFamily: "'Cinzel Decorative', serif", fontSize: 18, color: success ? "#6ee7b7" : "#f87171", letterSpacing: 4 }}>
-            {isDead ? "ACOLYTE LOST" : success ? "MISSION SUCCESS" : "MISSION FAILURE"}
+            {isDead ? "OPERATIVE LOST" : success ? "MISSION SUCCESS" : "MISSION FAILURE"}
           </div>
           {!isDead && (
             <div style={{ fontFamily: "'IM Fell English', serif", fontSize: 13, color: "#8a7050", marginTop: 6 }}>
@@ -805,7 +826,7 @@ export default function MissionSystem({ onNavigate }) {
           <div style={{ display: "flex", gap: 12, flexWrap: "wrap" }}>
             <button onClick={() => { setPhase("select_mission"); resetMissionState(); }}>Deploy Again</button>
             <button onClick={() => { setPhase("select_character"); resetMissionState(); setResults([]); setInjuries([]); setDeathCheck(null); setMissionOutcome(null); setFatePrompt(false); setIsDead(false); }}>
-              Change Acolyte
+              Change Operative
             </button>
             <button onClick={() => onNavigate("home")}>Return to Base</button>
           </div>
@@ -985,13 +1006,13 @@ export default function MissionSystem({ onNavigate }) {
         </div>
         
         {/* Combat Log */}
-        <div ref={combatLogRef} style={{ border: "1px solid #3a2510", background: "rgba(15,10,4,0.85)", marginBottom: 16, maxHeight: 250, overflowY: "auto" }}>
-          <div style={{ background: "linear-gradient(90deg,#2a1808,#1a1005,#2a1808)", borderBottom: "1px solid #3a2510", padding: "8px 16px", fontFamily: "'Cinzel Decorative', serif", fontSize: 10, color: "#a07030", letterSpacing: 3 }}>
-            — COMBAT LOG —
+        <div ref={combatLogRef} style={{ border: "1px solid #1e3d5c", background: "rgba(8,15,28,0.9)", marginBottom: 16, maxHeight: 250, overflowY: "auto" }}>
+          <div style={{ background: "linear-gradient(90deg,#080f1c,#0c1824,#080f1c)", borderBottom: "1px solid #1e3d5c", padding: "8px 16px", fontFamily: "'Share Tech Mono', monospace", fontSize: 10, color: "#c8a84a", letterSpacing: 3 }}>
+            — ENGAGEMENT LOG —
           </div>
           {combatLog.length === 0 ? (
-            <div style={{ padding: 16, textAlign: "center", fontFamily: "'IM Fell English', serif", fontSize: 12, color: "#6a5030", fontStyle: "italic" }}>
-              Combat begins! Choose your action.
+            <div style={{ padding: 16, textAlign: "center", fontFamily: "'Share Tech Mono', monospace", fontSize: 11, color: "#2e5a82" }}>
+              Engagement active. Awaiting orders.
             </div>
           ) : (
             combatLog.map((log, i) => (
@@ -1435,6 +1456,91 @@ export default function MissionSystem({ onNavigate }) {
       const firstActor = initiative[0];
       if (firstActor?.type === 'enemy') {
         enemyTurn(0, initiative, partyPos, enemyPos);
+      }
+    }, 500);
+  }
+
+  // ── External combat initialization (from campaign exploration) ──────────
+  function startExternalCombat() {
+    const combatParty = initialParty;
+    const combatEncounter = initialEncounter;
+
+    setPartyWounds(combatParty.map(() => 0));
+    setCurrentPartyMember(0);
+    setEncounter(combatEncounter);
+    setFateSpentInMission(combatParty.map(() => false));
+    setSelectedMovementTarget(null);
+    setCurrentTurn(0);
+    setEnemyWounds(combatEncounter.enemies.map(e => e.wounds));
+    setCurrentEnemy(0);
+
+    // Initialize grid positions
+    const partyPositions = combatParty.map((p, i) => ({
+      x: 1 + (i % 2) * 2,
+      y: 5 + i * 3,
+    }));
+    const enemyPositions = combatEncounter.enemies.map((e, i) => ({
+      x: 18 - (i % 2) * 2,
+      y: 5 + i * 3,
+    }));
+
+    const generatedTerrain = generateTerrain();
+    setTerrain(generatedTerrain);
+    terrainRef.current = generatedTerrain;
+    setGridPositions({ party: partyPositions, enemies: enemyPositions });
+    setPartyBodyWounds(combatParty.map(() => emptyBodyWounds()));
+    setEnemyBodyWounds(combatEncounter.enemies.map(() => emptyBodyWounds()));
+
+    const initActiveWeapons = {};
+    combatParty.forEach((p, i) => {
+      const ws = getCharWeapons(p);
+      if (ws.length > 0) initActiveWeapons[i] = ws[0].id;
+    });
+    setActiveWeapons(initActiveWeapons);
+    setEnemyPinned(combatEncounter.enemies.map(() => false));
+    setPartyReactionsUsed(combatParty.map(() => false));
+    setEnemyReactionsUsed(combatEncounter.enemies.map(() => false));
+    setRemainingAction('full');
+    setFireMode('single');
+
+    // Calculate initiative
+    const initiative = [];
+    combatParty.forEach((p, i) => {
+      const agi = p.stats.agility || 20;
+      const per = p.stats.perception || 20;
+      const stat = Math.max(agi, per);
+      const roll = d100();
+      const total = roll + stat;
+      initiative.push({ type: 'party', index: i, name: p.name, roll, stat, total });
+    });
+    combatEncounter.enemies.forEach((e, i) => {
+      const agi = e.stats.agility || 20;
+      const per = e.stats.perception || 20;
+      const stat = Math.max(agi, per);
+      const roll = d100();
+      const total = roll + stat;
+      initiative.push({ type: 'enemy', index: i, name: e.name, roll, stat, total });
+    });
+    initiative.sort((a, b) => b.total - a.total);
+
+    setInitiativeOrder(initiative);
+    setCurrentTurn(0);
+
+    const logEntries = initiative.map((entry, idx) =>
+      `${idx + 1}. ${entry.name} (${entry.type === 'party' ? 'Party' : 'Enemy'}): ${entry.roll} + ${entry.stat} = ${entry.total}`
+    );
+    setCombatLog([
+      { type: "system", text: "=== INITIATIVE ===" },
+      ...logEntries.map(t => ({ type: "system", text: t })),
+      { type: "system", text: `Combat begins with ${combatEncounter.enemies.length} enemy/enemies!` },
+    ]);
+    setCombatAction('movement');
+    setPhase("combat");
+
+    setTimeout(() => {
+      const firstActor = initiative[0];
+      if (firstActor?.type === 'enemy') {
+        enemyTurn(0, initiative, partyPositions, enemyPositions);
       }
     }, 500);
   }
@@ -2601,9 +2707,16 @@ export default function MissionSystem({ onNavigate }) {
   }
 
   function completeMission(victory) {
+    // ── External combat (from campaign exploration) ────────────────────────
+    if (skipSelectionPhases && onCombatEnd) {
+      const totalPartyWounds = partyWounds.reduce((sum, w) => sum + w, 0);
+      onCombatEnd({ victory, partyWounds: totalPartyWounds, party });
+      return;
+    }
+
     const char = selectedChar;
     const currentCheck = selectedMission.checks[currentCheckIndex];
-    
+
     // Record combat result
     const combatResult = {
       label: currentCheck.label,
@@ -2617,18 +2730,18 @@ export default function MissionSystem({ onNavigate }) {
       extreme: false,
       isCombat: true,
     };
-    
+
     const newResults = [...checkResults, combatResult];
     setCheckResults(newResults);
-    
+
     // Check if there are more checks after this combat
     const nextIndex = currentCheckIndex + 1;
-    
+
     if (nextIndex < selectedMission.checks.length && victory) {
       // More checks to go after combat victory
       const nextCheck = selectedMission.checks[nextIndex];
       setCurrentCheckIndex(nextIndex);
-      
+
       if (nextCheck.isCombat) {
         // Generate next combat encounter
         const environment = getEnvironmentFromMission(selectedMission);
@@ -3037,27 +3150,27 @@ function CharacterDetailPopup({ char, enemy, bodyWounds, maxWounds, onClose }) {
 // ── SHARED UI COMPONENTS ─────────────────────────────────────
 function Screen({ children, onNavigate, title, subtitle, onBack }) {
   return (
-    <div style={{ minHeight: "100vh", background: "#0a0804", color: "#c8b89a", fontFamily: "'Cinzel', serif", position: "relative", overflow: "hidden" }}>
-      <div style={{ position: "fixed", inset: 0, backgroundImage: "repeating-linear-gradient(0deg,transparent,transparent 40px,rgba(139,90,43,0.03) 40px,rgba(139,90,43,0.03) 41px),repeating-linear-gradient(90deg,transparent,transparent 40px,rgba(139,90,43,0.03) 40px,rgba(139,90,43,0.03) 41px)", pointerEvents: "none", zIndex: 0 }} />
-      <div style={{ position: "fixed", inset: 0, background: "radial-gradient(ellipse at 50% 0%,rgba(180,120,40,0.08) 0%,transparent 70%)", pointerEvents: "none", zIndex: 0 }} />
+    <div style={{ minHeight: "100vh", background: "#06080f", color: "#8ab4d4", fontFamily: "'Cinzel', serif", position: "relative", overflow: "hidden" }}>
+      <div style={{ position: "fixed", inset: 0, backgroundImage: "repeating-linear-gradient(0deg,transparent,transparent 40px,rgba(30,80,140,0.06) 40px,rgba(30,80,140,0.06) 41px),repeating-linear-gradient(90deg,transparent,transparent 40px,rgba(30,80,140,0.06) 40px,rgba(30,80,140,0.06) 41px)", pointerEvents: "none", zIndex: 0 }} />
+      <div style={{ position: "fixed", inset: 0, background: "radial-gradient(ellipse at 50% 0%,rgba(20,80,180,0.10) 0%,transparent 65%)", pointerEvents: "none", zIndex: 0 }} />
 
       <style>{`
-        @import url('https://fonts.googleapis.com/css2?family=Cinzel:wght@400;600;700&family=Cinzel+Decorative:wght@700&family=IM+Fell+English&display=swap');
+        @import url('https://fonts.googleapis.com/css2?family=Cinzel:wght@400;600;700&family=Cinzel+Decorative:wght@700&family=Share+Tech+Mono&display=swap');
         * { box-sizing: border-box; }
-        button { background: linear-gradient(180deg,#3a2510 0%,#1e1208 100%); color: #c8b89a; border: 1px solid #5a3e1b; padding: 6px 14px; font-family: 'Cinzel',serif; font-size: 11px; letter-spacing: 1px; cursor: pointer; transition: all 0.2s; border-radius: 0; }
-        button:hover { border-color: #c09040; color: #f0d890; background: linear-gradient(180deg,#5a3510 0%,#2e1e08 100%); }
+        button { background: linear-gradient(180deg,#0c1a2e 0%,#080f1c 100%); color: #8ab4d4; border: 1px solid #1e3d5c; border-left: 2px solid #1e4a7a; padding: 6px 14px; font-family: 'Cinzel',serif; font-size: 11px; letter-spacing: 1px; cursor: pointer; transition: all 0.2s; border-radius: 0; }
+        button:hover { border-color: #c8a84a; border-left-color: #c8a84a; color: #e8d090; background: linear-gradient(180deg,#101e30 0%,#0c1624 100%); }
       `}</style>
 
       <div style={{ maxWidth: 800, margin: "0 auto", padding: "24px 16px", position: "relative", zIndex: 1 }}>
         <div style={{ marginBottom: 16, display: "flex", gap: 12, alignItems: "center" }}>
           {onBack
             ? <button onClick={onBack}>← Back</button>
-            : <button onClick={() => onNavigate("home")}>← Main Menu</button>
+            : <button onClick={() => onNavigate("home")}>← Command</button>
           }
         </div>
-        <div style={{ textAlign: "center", marginBottom: 28, borderBottom: "1px solid #3a2510", paddingBottom: 16 }}>
-          <div style={{ fontFamily: "'Cinzel Decorative',serif", fontSize: 22, color: "#c09040", letterSpacing: 5 }}>{title}</div>
-          {subtitle && <div style={{ fontFamily: "'IM Fell English',serif", fontSize: 13, color: "#6a5030", letterSpacing: 2, marginTop: 4 }}>{subtitle}</div>}
+        <div style={{ textAlign: "center", marginBottom: 28, borderBottom: "1px solid #1e3d5c", paddingBottom: 16 }}>
+          <div style={{ fontFamily: "'Cinzel Decorative',serif", fontSize: 22, color: "#c8a84a", letterSpacing: 5 }}>{title}</div>
+          {subtitle && <div style={{ fontFamily: "'Share Tech Mono',monospace", fontSize: 11, color: "#2e5a82", letterSpacing: 2, marginTop: 6 }}>{subtitle}</div>}
         </div>
         {children}
       </div>
@@ -3067,7 +3180,7 @@ function Screen({ children, onNavigate, title, subtitle, onBack }) {
 
 function Badge({ children }) {
   return (
-    <span style={{ border: "1px solid #4a3010", background: "rgba(90,62,27,0.2)", padding: "3px 10px", fontSize: 10, letterSpacing: 2, color: "#9a7840", display: "inline-block" }}>
+    <span style={{ border: "1px solid #1e4a7a", background: "rgba(30,74,122,0.15)", padding: "3px 10px", fontSize: 10, letterSpacing: 2, color: "#4a8aaa", display: "inline-block", fontFamily: "'Share Tech Mono',monospace" }}>
       {children}
     </span>
   );
