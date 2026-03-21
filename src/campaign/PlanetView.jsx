@@ -1,6 +1,6 @@
-// PlanetView.jsx — Planet details + region selector
-// Shows planet overview, stats, and a list of regions to deploy into.
-import { useEffect } from "react";
+// PlanetView.jsx — Planet details + region selector + squad deployment
+// Shows planet overview, stats, squad selection, and region list.
+import { useState, useEffect } from "react";
 import { generatePlanet, BIOME_TABLE } from "../generation/planetGenerator";
 
 const BIOME_ICONS = {
@@ -82,6 +82,100 @@ function RegionCard({ region, index, onSelect }) {
         <span style={{ color: "#4a8aaa" }}>Pop: {formatPop(region.population)}</span>
         <span style={{ color: "#4a8aaa" }}>POIs: {region.pois.length}</span>
       </div>
+    </div>
+  );
+}
+
+function SquadDeployment({ deployedSquad, onDeploy }) {
+  const [roster, setRoster] = useState([]);
+  const [selected, setSelected] = useState(new Set());
+
+  useEffect(() => {
+    const r = JSON.parse(localStorage.getItem("dhgen_roster") || "[]");
+    setRoster(r.filter(c => c && !c.kia));
+    // Pre-select already deployed squad members
+    if (deployedSquad?.length > 0) {
+      setSelected(new Set(deployedSquad.map(c => c.id || c.name)));
+    }
+  }, []);
+
+  const toggle = (id) => {
+    setSelected(prev => {
+      const next = new Set(prev);
+      if (next.has(id)) next.delete(id);
+      else if (next.size < 8) next.add(id);
+      return next;
+    });
+  };
+
+  const confirm = () => {
+    const squad = roster.filter(c => selected.has(c.id || c.name));
+    onDeploy(squad);
+  };
+
+  const roleColors = {
+    "Veteran Infantry": "#6ee7b7", "Sanctioned": "#b090e0", "Artificer": "#e0c060",
+    "Corpsman": "#60b0e0", "Demotech": "#e08060", "Infiltrator": "#a0a0c0",
+  };
+
+  return (
+    <div>
+      <div style={{ fontFamily: "'Share Tech Mono', monospace", fontSize: 10, color: "#4a7a9a",
+        marginBottom: 12, lineHeight: 1.5 }}>
+        Select up to 8 operatives to deploy. The Prefect always deploys.
+      </div>
+      {roster.map((char, i) => {
+        const id = char.id || char.name;
+        const isSel = selected.has(id);
+        const isPrefect = char.isPrefect || (char.class && char.class.includes("Prefect"));
+        const role = char.role || char.class || "Operative";
+        const roleBase = Object.keys(roleColors).find(r => role.includes(r)) || role;
+        const color = roleColors[roleBase] || "#8ab4d4";
+
+        // Auto-select prefect
+        if (isPrefect && !selected.has(id) && selected.size < 8) {
+          selected.add(id);
+        }
+
+        return (
+          <div key={id + i} onClick={() => !isPrefect && toggle(id)} style={{
+            border: `1px solid ${isSel ? "#2a8a5a" : "#0e1e30"}`,
+            borderLeft: `3px solid ${isSel ? "#3aaa70" : color}`,
+            background: isSel ? "rgba(8,20,14,0.6)" : "rgba(8,15,28,0.7)",
+            padding: "8px 12px", marginBottom: 6, cursor: isPrefect ? "default" : "pointer",
+            transition: "border-color 0.2s", display: "flex", justifyContent: "space-between",
+            alignItems: "center",
+          }}>
+            <div>
+              <div style={{ fontSize: 12, color: isSel ? "#6ee7b7" : "#8ab4d4",
+                fontFamily: "'Cinzel', serif", letterSpacing: 1 }}>
+                {char.name}
+                {isPrefect && <span style={{ fontSize: 8, color: "#c8a84a", marginLeft: 8,
+                  fontFamily: "'Share Tech Mono', monospace", letterSpacing: 2 }}>PREFECT</span>}
+              </div>
+              <div style={{ fontSize: 9, color: "#2e5a82", fontFamily: "'Share Tech Mono', monospace" }}>
+                {char.origin ? `${char.origin} · ` : ""}{role}
+                {char.personality ? ` · ${char.personality}` : ""}
+              </div>
+            </div>
+            <div style={{ display: "flex", gap: 6, fontSize: 9, fontFamily: "'Share Tech Mono', monospace" }}>
+              <span style={{ color: "#2e5a82" }}>W:<span style={{ color: "#c8a84a" }}>{char.wounds}</span></span>
+              {isSel && <span style={{ color: "#3aaa70" }}>✓</span>}
+            </div>
+          </div>
+        );
+      })}
+      <button onClick={confirm} disabled={selected.size === 0} style={{
+        background: selected.size > 0 ? "linear-gradient(180deg,#0a1e14 0%,#060f0a 100%)" : "rgba(8,15,28,0.5)",
+        color: selected.size > 0 ? "#6ee7b7" : "#2e5a82",
+        border: `1px solid ${selected.size > 0 ? "#1e5a3a" : "#0e1e30"}`,
+        borderLeft: `3px solid ${selected.size > 0 ? "#2a7a50" : "#0e1e30"}`,
+        padding: "10px 20px", fontFamily: "'Cinzel', serif", fontSize: 11,
+        letterSpacing: 2, cursor: selected.size > 0 ? "pointer" : "not-allowed",
+        width: "100%", marginTop: 8, transition: "all 0.2s",
+      }}>
+        ⬡ DEPLOY SQUAD ({selected.size} operative{selected.size !== 1 ? "s" : ""})
+      </button>
     </div>
   );
 }
@@ -231,18 +325,65 @@ export default function PlanetView({ state, dispatch }) {
           </Section>
         </div>
 
-        {/* Right panel — regions */}
+        {/* Right panel — squad deployment + regions */}
         <div className="planet-regions">
-          <Section title="Regions — Select Deployment Zone">
-            {planet.regions.map((region, i) => (
-              <RegionCard key={region.id} region={region} index={i}
-                onSelect={() => dispatch({
-                  type: "SELECT_REGION",
-                  regionId: region.id,
-                  startPosition: { x: 10, y: 18 },
-                })}
+          {/* Squad deployment — show if no squad deployed yet */}
+          <Section title={state.deployedSquad?.length > 0 ? `Deployed Squad (${state.deployedSquad.length})` : "Squad Deployment"}>
+            {state.deployedSquad?.length > 0 ? (
+              <>
+                <div style={{ marginBottom: 8 }}>
+                  {state.deployedSquad.map((char, i) => {
+                    const isPrefect = char.isPrefect || (char.class && char.class.includes("Prefect"));
+                    return (
+                      <div key={char.id || i} style={{
+                        display: "flex", justifyContent: "space-between", alignItems: "center",
+                        padding: "4px 8px", marginBottom: 3,
+                        background: "rgba(8,20,14,0.4)", borderLeft: "2px solid #2a7a50",
+                        fontSize: 10, fontFamily: "'Share Tech Mono', monospace",
+                      }}>
+                        <span style={{ color: "#6ee7b7" }}>
+                          {char.name}
+                          {isPrefect && <span style={{ color: "#c8a84a", marginLeft: 6, fontSize: 8 }}>PFT</span>}
+                        </span>
+                        <span style={{ color: "#2e5a82" }}>{char.role || char.class}</span>
+                      </div>
+                    );
+                  })}
+                </div>
+                <button onClick={() => dispatch({ type: "DEPLOY_SQUAD", squad: [] })} style={{
+                  background: "transparent", border: "1px solid #1e3d5c", color: "#2e5a82",
+                  padding: "4px 12px", fontSize: 9, fontFamily: "'Share Tech Mono', monospace",
+                  cursor: "pointer", letterSpacing: 1, marginBottom: 8,
+                }}>
+                  ↺ REASSIGN SQUAD
+                </button>
+              </>
+            ) : (
+              <SquadDeployment
+                deployedSquad={state.deployedSquad}
+                onDeploy={(squad) => dispatch({ type: "DEPLOY_SQUAD", squad })}
               />
-            ))}
+            )}
+          </Section>
+
+          {/* Regions — only selectable when squad is deployed */}
+          <Section title="Regions — Select Deployment Zone">
+            {state.deployedSquad?.length > 0 ? (
+              planet.regions.map((region, i) => (
+                <RegionCard key={region.id} region={region} index={i}
+                  onSelect={() => dispatch({
+                    type: "SELECT_REGION",
+                    regionId: region.id,
+                    startPosition: { x: 10, y: 18 },
+                  })}
+                />
+              ))
+            ) : (
+              <div style={{ fontSize: 10, color: "#2e5a82", fontFamily: "'Share Tech Mono', monospace",
+                fontStyle: "italic", padding: "8px 0" }}>
+                Deploy your squad before selecting a region.
+              </div>
+            )}
           </Section>
 
           <div style={{ textAlign: "center", padding: "16px 0", fontSize: 9,

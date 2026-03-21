@@ -32,6 +32,7 @@ export default class CombatScene extends Phaser.Scene {
     this._shotModeHandler    = null; // shot-mode active/inactive
     this._shotModeData       = null; // { active, fromPos, accuracy }
     this._pointerMoveHandler = null;
+    this._floatTextHandler   = null;
   }
 
   // ── Lifecycle ────────────────────────────────────────────────
@@ -55,6 +56,10 @@ export default class CombatScene extends Phaser.Scene {
       if (!data.active && this._coneGfx) this._coneGfx.clear();
     };
     eventBridge.on('shot-mode', this._shotModeHandler);
+
+    // Floating damage/miss text
+    this._floatTextHandler = (data) => this._showFloatText(data);
+    eventBridge.on('combat-float-text', this._floatTextHandler);
 
     // Pointer input → forward grid clicks to React
     this.input.on('pointerdown', (pointer) => {
@@ -88,7 +93,8 @@ export default class CombatScene extends Phaser.Scene {
     if (this._hitHandler)      eventBridge.off('combat-hit',   this._hitHandler);
     if (this._deathHandler)    eventBridge.off('combat-death', this._deathHandler);
     if (this._shotHandler)     eventBridge.off('combat-shot',  this._shotHandler);
-    if (this._shotModeHandler) eventBridge.off('shot-mode',    this._shotModeHandler);
+    if (this._shotModeHandler)  eventBridge.off('shot-mode',          this._shotModeHandler);
+    if (this._floatTextHandler) eventBridge.off('combat-float-text', this._floatTextHandler);
     this.input.off('pointermove', this._pointerMoveHandler);
   }
 
@@ -579,6 +585,36 @@ export default class CombatScene extends Phaser.Scene {
     this._coneGfx.lineTo(x3, y3);
     this._coneGfx.closePath();
     this._coneGfx.strokePath();
+  }
+
+  // ── Floating Damage Text ─────────────────────────────────────
+  _showFloatText({ targetType, targetIndex, text, color }) {
+    if (!this.sys?.isActive()) return;
+    const sp = targetType === 'party'
+      ? this.partySprites[targetIndex]
+      : this.enemySprites[targetIndex];
+    if (!sp?.rect) return;
+
+    const px = sp.rect.x;
+    const py = sp.rect.y - TILE_SIZE * 0.6;
+
+    const floatTxt = this.add.text(px, py, text, {
+      fontSize: '12px',
+      fontFamily: 'Arial',
+      fontStyle: 'bold',
+      color: color || '#ffffff',
+      stroke: '#000000',
+      strokeThickness: 3,
+    }).setOrigin(0.5).setDepth(10);
+
+    this.tweens.add({
+      targets: floatTxt,
+      y: py - 30,
+      alpha: 0,
+      duration: 1200,
+      ease: 'Power2',
+      onComplete: () => floatTxt.destroy(),
+    });
   }
 
   // ── Helpers ──────────────────────────────────────────────────

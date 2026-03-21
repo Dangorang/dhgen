@@ -15,6 +15,28 @@ const TIER_ORDER = { Routine: 0, Dangerous: 1, Deadly: 2 };
 
 function d100() { return Math.floor(Math.random() * 100) + 1; }
 function d6()   { return Math.floor(Math.random() * 6) + 1; }
+function clamp(v, lo, hi) { return Math.max(lo, Math.min(hi, v)); }
+
+// Place N units in a 2-column layout that fits within the 20x20 grid (y: 1-18)
+function placeUnitsOnGrid(count, colA, colB) {
+  if (count === 0) return [];
+  const rows = Math.ceil(count / 2);
+  // Evenly space rows across usable vertical range (y 1-18)
+  const usableHeight = 17; // y 1 to 18
+  const spacing = rows > 1 ? Math.min(3, Math.floor(usableHeight / (rows - 1))) : 0;
+  const totalHeight = (rows - 1) * spacing;
+  const startY = Math.max(1, Math.floor((usableHeight - totalHeight) / 2) + 1);
+  const positions = [];
+  for (let i = 0; i < count; i++) {
+    const row = Math.floor(i / 2);
+    const col = i % 2;
+    positions.push({
+      x: clamp(col === 0 ? colA : colB, 0, 19),
+      y: clamp(startY + row * spacing, 1, 18),
+    });
+  }
+  return positions;
+}
 
 // ── Combat helpers ────────────────────────────────────────────
 function rollDamageDice(damageStr, psyRating = 0) {
@@ -50,9 +72,15 @@ function getCharDodgeTarget(char) {
   const agi = char.stats?.agility    || 20;
   const per = char.stats?.perception || 20;
   const psy = char.stats?.psyRating  || 0;
-  if (char.class === 'Adept')            return { target: agi + per + psy, label: 'Precognition Dodge' };
-  if (char.class === 'Veteran Infantry') return { target: agi,             label: 'Trained Dodge'      };
-  return { target: Math.floor(agi / 2),                                    label: 'Base Dodge'          };
+  const cls = (char.class || char.role || '').toLowerCase();
+  // Sanctioned (psionic) get Precognition dodge
+  if (cls.includes('sanctioned') || cls === 'adept')
+    return { target: agi + per + psy, label: 'Precognition Dodge' };
+  // Combat-trained roles get full AGI dodge
+  if (cls.includes('veteran') || cls.includes('prefect') || cls.includes('demotech') || cls.includes('corpsman') || cls.includes('infiltrator'))
+    return { target: agi, label: 'Trained Dodge' };
+  // Artificer and others get half AGI
+  return { target: Math.floor(agi / 2), label: 'Base Dodge' };
 }
 // Enemies: ability "Hyper Drugged Awareness" = AGI+20, skill "Trained Dodge" = AGI, else Base (AGI/2)
 function getEnemyDodgeTarget(enemy) {
@@ -325,6 +353,7 @@ export default function MissionSystem({ onNavigate, initialEncounter, initialPar
   const [encounter, setEncounter]       = useState(null);
   const [combatPhase, setCombatPhase]    = useState(null);
   const [combatLog, setCombatLog]       = useState([]);
+  const [logMinimized, setLogMinimized] = useState(false);
   const [fateSpentInMission, setFateSpentInMission] = useState(false);
   const [currentCheckIndex, setCurrentCheckIndex] = useState(0);
   const [checkResults, setCheckResults] = useState([]);
@@ -384,11 +413,13 @@ export default function MissionSystem({ onNavigate, initialEncounter, initialPar
   const [currentTurn, setCurrentTurn] = useState(0); // Index in initiativeOrder
 
   // Always-current refs — prevent stale closures in setTimeout callbacks
+  const enemyWoundsRef         = useRef([]);
   const enemyPinnedRef         = useRef([]);
   const partyReactionsUsedRef  = useRef([]);
   const enemyReactionsUsedRef  = useRef([]);
   // Keep refs in sync
   useEffect(() => { partyWoundsRef.current          = partyWounds;          }, [partyWounds]);
+  useEffect(() => { enemyWoundsRef.current          = enemyWounds;          }, [enemyWounds]);
   useEffect(() => { enemyPinnedRef.current          = enemyPinned;          }, [enemyPinned]);
   useEffect(() => { partyReactionsUsedRef.current   = partyReactionsUsed;   }, [partyReactionsUsed]);
   useEffect(() => { enemyReactionsUsedRef.current   = enemyReactionsUsed;   }, [enemyReactionsUsed]);
@@ -1005,35 +1036,6 @@ export default function MissionSystem({ onNavigate, initialEncounter, initialPar
           ) : "Combat Starting..."}
         </div>
         
-        {/* Combat Log */}
-        <div ref={combatLogRef} style={{ border: "1px solid #1e3d5c", background: "rgba(8,15,28,0.9)", marginBottom: 16, maxHeight: 250, overflowY: "auto" }}>
-          <div style={{ background: "linear-gradient(90deg,#080f1c,#0c1824,#080f1c)", borderBottom: "1px solid #1e3d5c", padding: "8px 16px", fontFamily: "'Share Tech Mono', monospace", fontSize: 10, color: "#c8a84a", letterSpacing: 3 }}>
-            — ENGAGEMENT LOG —
-          </div>
-          {combatLog.length === 0 ? (
-            <div style={{ padding: 16, textAlign: "center", fontFamily: "'Share Tech Mono', monospace", fontSize: 11, color: "#2e5a82" }}>
-              Engagement active. Awaiting orders.
-            </div>
-          ) : (
-            combatLog.map((log, i) => (
-              <div key={i} style={{ 
-                padding: "8px 16px", 
-                borderBottom: "1px solid #1a1005", 
-                fontFamily: "'IM Fell English', serif", 
-                fontSize: 12,
-                background: log.type === "player" ? "rgba(40,80,40,0.2)" : log.type === "enemy" ? "rgba(80,30,30,0.2)" : "transparent",
-                color: log.type === "player" ? "#6ee7b7" : log.type === "enemy" ? "#f87171" : "#a89070",
-                borderLeft: log.type === "player" ? "3px solid #6ee7b7" : log.type === "enemy" ? "3px solid #f87171" : "3px solid #5a3e1b"
-              }}>
-                <span style={{ fontWeight: "bold", marginRight: 8 }}>
-                  {log.type === "player" ? "▶ YOU" : log.type === "enemy" ? "▶ ENEMY" : "◆"}
-                </span>
-                {log.text}
-              </div>
-            ))
-          )}
-        </div>
-        
         {/* Combat Actions - only show when no pending fate */}
         {pendingFateIndex === null && !allEnemiesDead && isPlayerTurn && (
           <div style={{ border: "1px solid #3a2510", background: "rgba(15,10,4,0.85)", padding: "12px 16px", marginBottom: 16 }}>
@@ -1184,7 +1186,7 @@ export default function MissionSystem({ onNavigate, initialEncounter, initialPar
                           setCombatLog(prev => [...prev, { type: "player", text: `${actorChar?.name} holds position.` }]);
                           setAiming(false);
                           setFireMode('single');
-                          setTimeout(() => advanceInitiative(currentTurn, initiativeOrder, gridPositions.party, gridPositions.enemies, enemyWounds), 500);
+                          setTimeout(() => advanceInitiative(currentTurn, initiativeOrder, gridPositions.party, gridPositions.enemies, enemyWoundsRef.current), 500);
                         }}
                         style={{ borderColor: "#5a3e1b", color: "#8a7050", padding: "8px 14px", fontSize: 10 }}>
                         Skip Attack
@@ -1225,7 +1227,7 @@ export default function MissionSystem({ onNavigate, initialEncounter, initialPar
                       <button
                         onClick={() => {
                           setCombatLog(prev => [...prev, { type: "player", text: `${actorChar?.name} holds position.` }]);
-                          setTimeout(() => advanceInitiative(currentTurn, initiativeOrder, gridPositions.party, gridPositions.enemies, enemyWounds), 500);
+                          setTimeout(() => advanceInitiative(currentTurn, initiativeOrder, gridPositions.party, gridPositions.enemies, enemyWoundsRef.current), 500);
                         }}
                         style={{ borderColor: "#5a3e1b", color: "#8a7050", padding: "10px 18px" }}>
                         Skip Attack
@@ -1246,7 +1248,7 @@ export default function MissionSystem({ onNavigate, initialEncounter, initialPar
                       <button
                         onClick={() => {
                           setCombatLog(prev => [...prev, { type: "player", text: `${actorChar?.name} holds position.` }]);
-                          setTimeout(() => advanceInitiative(currentTurn, initiativeOrder, gridPositions.party, gridPositions.enemies, enemyWounds), 500);
+                          setTimeout(() => advanceInitiative(currentTurn, initiativeOrder, gridPositions.party, gridPositions.enemies, enemyWoundsRef.current), 500);
                         }}
                         style={{ borderColor: "#5a3e1b", color: "#8a7050", padding: "10px 18px" }}>
                         Skip Attack
@@ -1278,7 +1280,7 @@ export default function MissionSystem({ onNavigate, initialEncounter, initialPar
                       <button
                         onClick={() => {
                           setCombatLog(prev => [...prev, { type: "player", text: `${actorChar?.name} holds position.` }]);
-                          setTimeout(() => advanceInitiative(currentTurn, initiativeOrder, gridPositions.party, gridPositions.enemies, enemyWounds), 500);
+                          setTimeout(() => advanceInitiative(currentTurn, initiativeOrder, gridPositions.party, gridPositions.enemies, enemyWoundsRef.current), 500);
                         }}
                         style={{ borderColor: "#5a3e1b", color: "#8a7050", padding: "6px 14px", fontSize: 10, marginTop: 4 }}>
                         Skip Attack
@@ -1290,7 +1292,43 @@ export default function MissionSystem({ onNavigate, initialEncounter, initialPar
             })()}
           </div>
         )}
-        
+
+        {/* Combat Log (minimizable) */}
+        <div style={{ border: "1px solid #1e3d5c", background: "rgba(8,15,28,0.9)", marginBottom: 16 }}>
+          <div
+            onClick={() => setLogMinimized(prev => !prev)}
+            style={{ background: "linear-gradient(90deg,#080f1c,#0c1824,#080f1c)", borderBottom: logMinimized ? "none" : "1px solid #1e3d5c", padding: "8px 16px", fontFamily: "'Share Tech Mono', monospace", fontSize: 10, color: "#c8a84a", letterSpacing: 3, cursor: "pointer", display: "flex", justifyContent: "space-between", alignItems: "center", userSelect: "none" }}>
+            <span>— ENGAGEMENT LOG —</span>
+            <span style={{ fontSize: 12, color: "#4a6a8a" }}>{logMinimized ? "▶" : "▼"}</span>
+          </div>
+          {!logMinimized && (
+            <div ref={combatLogRef} style={{ maxHeight: 250, overflowY: "auto" }}>
+              {combatLog.length === 0 ? (
+                <div style={{ padding: 16, textAlign: "center", fontFamily: "'Share Tech Mono', monospace", fontSize: 11, color: "#2e5a82" }}>
+                  Engagement active. Awaiting orders.
+                </div>
+              ) : (
+                combatLog.map((log, i) => (
+                  <div key={i} style={{
+                    padding: "8px 16px",
+                    borderBottom: "1px solid #1a1005",
+                    fontFamily: "'IM Fell English', serif",
+                    fontSize: 12,
+                    background: log.type === "player" ? "rgba(40,80,40,0.2)" : log.type === "enemy" ? "rgba(80,30,30,0.2)" : "transparent",
+                    color: log.type === "player" ? "#6ee7b7" : log.type === "enemy" ? "#f87171" : "#a89070",
+                    borderLeft: log.type === "player" ? "3px solid #6ee7b7" : log.type === "enemy" ? "3px solid #f87171" : "3px solid #5a3e1b"
+                  }}>
+                    <span style={{ fontWeight: "bold", marginRight: 8 }}>
+                      {log.type === "player" ? "▶ YOU" : log.type === "enemy" ? "▶ ENEMY" : "◆"}
+                    </span>
+                    {log.text}
+                  </div>
+                ))
+              )}
+            </div>
+          )}
+        </div>
+
         {/* Combat End States - Fate Resolution */}
         {pendingFateIndex !== null && (
           <div style={{ border: "1px solid #7a1a1a", background: "rgba(60,10,10,0.8)", padding: 20, textAlign: "center" }}>
@@ -1365,16 +1403,9 @@ export default function MissionSystem({ onNavigate, initialEncounter, initialPar
     setEnemyWounds(generatedEncounter.enemies.map(e => e.wounds));
     setCurrentEnemy(0);
     
-    // Initialize grid positions
-    const partyPositions = party.map((p, i) => ({
-      x: 1 + (i % 2) * 2,
-      y: 5 + i * 3,
-    }));
-    
-    const enemyPositions = generatedEncounter.enemies.map((e, i) => ({
-      x: 18 - (i % 2) * 2,
-      y: 5 + i * 3,
-    }));
+    // Initialize grid positions — 2-column layout, evenly spaced to fit grid
+    const partyPositions = placeUnitsOnGrid(party.length, 1, 3, true);
+    const enemyPositions = placeUnitsOnGrid(generatedEncounter.enemies.length, 16, 18, false);
     
     const generatedTerrain = generateTerrain();
     setTerrain(generatedTerrain);
@@ -1464,6 +1495,9 @@ export default function MissionSystem({ onNavigate, initialEncounter, initialPar
   function startExternalCombat() {
     const combatParty = initialParty;
     const combatEncounter = initialEncounter;
+    // Check if this is a surround ambush from the campaign context
+    // We read from the parent component's props (the CampaignSystem passes combatContext)
+    const isSurroundAmbush = combatEncounter._ambushLayout === "surround";
 
     setPartyWounds(combatParty.map(() => 0));
     setCurrentPartyMember(0);
@@ -1475,14 +1509,43 @@ export default function MissionSystem({ onNavigate, initialEncounter, initialPar
     setCurrentEnemy(0);
 
     // Initialize grid positions
-    const partyPositions = combatParty.map((p, i) => ({
-      x: 1 + (i % 2) * 2,
-      y: 5 + i * 3,
-    }));
-    const enemyPositions = combatEncounter.enemies.map((e, i) => ({
-      x: 18 - (i % 2) * 2,
-      y: 5 + i * 3,
-    }));
+    let partyPositions, enemyPositions;
+
+    if (isSurroundAmbush) {
+      // SURROUND LAYOUT: Party grouped in center, enemies on all four sides
+      const cx = 10, cy = 10;
+      // Party in a tight cluster around center (2-wide columns)
+      const partyRows = Math.ceil(combatParty.length / 2);
+      const partyStartY = cy - Math.floor(partyRows / 2);
+      partyPositions = combatParty.map((p, i) => ({
+        x: cx - 1 + (i % 2) * 2,
+        y: clamp(partyStartY + Math.floor(i / 2), 1, 18),
+      }));
+
+      // Distribute enemies around the perimeter in 4 cardinal groups
+      const surroundPositions = [];
+      const enemyCount = combatEncounter.enemies.length;
+      const sides = [
+        { baseX: cx - 1, baseY: cy - 5, dx: 1, dy: 0 },  // North
+        { baseX: cx - 1, baseY: cy + 5, dx: 1, dy: 0 },  // South
+        { baseX: cx - 5, baseY: cy - 1, dx: 0, dy: 1 },  // West
+        { baseX: cx + 5, baseY: cy - 1, dx: 0, dy: 1 },  // East
+      ];
+
+      for (let i = 0; i < enemyCount; i++) {
+        const side = sides[i % 4];
+        const offset = Math.floor(i / 4);
+        surroundPositions.push({
+          x: clamp(side.baseX + side.dx * offset, 1, 18),
+          y: clamp(side.baseY + side.dy * offset, 1, 18),
+        });
+      }
+      enemyPositions = surroundPositions;
+    } else {
+      // Standard layout: party on left, enemies on right
+      partyPositions = placeUnitsOnGrid(combatParty.length, 1, 3, true);
+      enemyPositions = placeUnitsOnGrid(combatEncounter.enemies.length, 16, 18, false);
+    }
 
     const generatedTerrain = generateTerrain();
     setTerrain(generatedTerrain);
@@ -1792,7 +1855,7 @@ export default function MissionSystem({ onNavigate, initialEncounter, initialPar
       eventBridge.emit('combat-shot', { fromPos: attackerPos, toPos: targetEnemyPos, count: 2, isHit: false, weaponClass: activeWep.class });
       setAiming(false);
       setFireMode('single');
-      setTimeout(() => advanceInitiative(currentTurn, initiativeOrder, gridPositions.party, gridPositions.enemies, enemyWounds), 1000);
+      setTimeout(() => advanceInitiative(currentTurn, initiativeOrder, gridPositions.party, gridPositions.enemies, enemyWoundsRef.current), 1000);
       return;
     }
 
@@ -1818,6 +1881,7 @@ export default function MissionSystem({ onNavigate, initialEncounter, initialPar
 
     if (mode === 'single') {
       log.push({ type: "player", text: `${char.name} [${modeLabel}] at ${target.name} — ${rangeBand} (${distTiles * 3}m)${modBreakdown} · PER ${per} = ${targetNum} (net ${netStr}): rolled ${roll}... ${hit ? 'HIT!' : 'MISS!'}` });
+      if (!hit) eventBridge.emit('combat-float-text', { targetType: 'enemy', targetIndex: targetIdx, text: 'MISS', color: '#aaaaaa' });
     } else {
       log.push({ type: "player", text: `${char.name} [${modeLabel} ×${rounds}] at ${target.name} — ${rangeBand} (${distTiles * 3}m)${modBreakdown} · PER ${per} = ${targetNum} (−5 recoil/round)` });
     }
@@ -1836,6 +1900,8 @@ export default function MissionSystem({ onNavigate, initialEncounter, initialPar
 
       if (mode !== 'single') {
         log.push({ type: "player", text: `  Rnd ${r + 1}: target ${roundTarget}${recoilPenalty ? ` (−${recoilPenalty} recoil)` : ''} → rolled ${roundRoll}... ${roundHit ? 'HIT' : 'miss'}` });
+        // Staggered per-round float text
+        setTimeout(() => eventBridge.emit('combat-float-text', { targetType: 'enemy', targetIndex: targetIdx, text: roundHit ? 'HIT' : 'MISS', color: roundHit ? '#6ee7b7' : '#aaaaaa' }), r * 120);
       }
 
       if (roundHit) {
@@ -1866,6 +1932,7 @@ export default function MissionSystem({ onNavigate, initialEncounter, initialPar
               enemyReactionsUsedRef.current = nr;
               setEnemyReactionsUsed(nr);
               if (scatDodged) {
+                eventBridge.emit('combat-float-text', { targetType: 'enemy', targetIndex: eIdx, text: 'DODGE', color: '#60aadd' });
                 log.push({ type: "enemy", text: `  ↳ ${scatEnemy.name} dodges scatter! (${scatDodgeLbl} ${scatDodgeTgt}: rolled ${scatDodgeRoll})` });
               } else {
                 log.push({ type: "enemy", text: `  ↳ ${scatEnemy.name} fails to dodge scatter (${scatDodgeRoll}/${scatDodgeTgt})` });
@@ -1876,6 +1943,7 @@ export default function MissionSystem({ onNavigate, initialEncounter, initialPar
               const scatArmor = Math.max(0, (scatEnemy.armor || 0) - (activeWep.pen || 0));
               const scatTb    = Math.floor((scatEnemy.stats?.toughness || 0) / 10);
               const scatNet   = Math.max(1, scatDmg - scatArmor - scatTb);
+              eventBridge.emit('combat-float-text', { targetType: 'enemy', targetIndex: eIdx, text: `-${scatNet}`, color: '#ff8844' });
               log.push({ type: "player", text: `  ↳ Rnd ${r + 1} scatter → ${scatEnemy.name}: ${scatDmg} − Armor ${scatArmor}${scatTb ? ` − TB${scatTb}` : ''} = ${scatNet} dmg` });
               newEnemyWounds[eIdx] = Math.max(0, newEnemyWounds[eIdx] - scatNet);
               if (newEnemyWounds[eIdx] <= 0) {
@@ -1905,6 +1973,7 @@ export default function MissionSystem({ onNavigate, initialEncounter, initialPar
         const { target: dodgeTarget2, label: dodgeLbl2 } = getEnemyDodgeTarget(target);
         dodged = dodgeRoll <= dodgeTarget2;
         if (dodged) {
+          eventBridge.emit('combat-float-text', { targetType: 'enemy', targetIndex: targetIdx, text: 'DODGE', color: '#60aadd' });
           log.push({ type: "enemy", text: `${target.name} DODGES the burst! (${dodgeLbl2} ${dodgeTarget2}: rolled ${dodgeRoll})` });
         } else {
           log.push({ type: "enemy", text: `${target.name} fails to dodge (rolled ${dodgeRoll}/${dodgeTarget2})` });
@@ -1930,6 +1999,7 @@ export default function MissionSystem({ onNavigate, initialEncounter, initialPar
           const effectiveArmor = Math.max(0, (target.armor || 0) - (activeWep.pen || 0));
           const tb       = Math.floor((target.stats?.toughness || 0) / 10);
           const finalDmg = Math.max(1, rawDmg - effectiveArmor - tb);
+          eventBridge.emit('combat-float-text', { targetType: 'enemy', targetIndex: targetIdx, text: `-${finalDmg}`, color: '#ff4444' });
           log.push({ type: "player", text: `${hitLabel}${loc}! ${rawDmg} dmg − Armor ${effectiveArmor}${tb ? ` − TB${tb}` : ''} = ${finalDmg}` });
           newEnemyWounds[targetIdx] = Math.max(0, newEnemyWounds[targetIdx] - finalDmg);
           setEnemyBodyWounds(prev => {
@@ -2056,7 +2126,7 @@ export default function MissionSystem({ onNavigate, initialEncounter, initialPar
         ? (partyWoundsRef.current[entry.index] || 0) >= (party[entry.index]?.wounds || 10)
         : (eWounds[entry.index] || 0) <= 0;
 
-      console.log("Dead check: entry", nextTurn, "=", entry.name, "type:", entry.type, "index:", entry.index, "isDead:", isDead, "wounds:", entry.type === 'party' ? partyWoundsRef.current[entry.index] : enemyWounds[entry.index]);
+      console.log("Dead check: entry", nextTurn, "=", entry.name, "type:", entry.type, "index:", entry.index, "isDead:", isDead, "wounds:", entry.type === 'party' ? partyWoundsRef.current[entry.index] : eWounds[entry.index]);
 
       if (!isDead) break;
       nextTurn++;
@@ -2173,6 +2243,7 @@ export default function MissionSystem({ onNavigate, initialEncounter, initialPar
               const parryRoll = d100();
               const parryTarget = impEnemy.stats.meleeSkill || 20;
               if (parryRoll <= parryTarget) {
+                eventBridge.emit('combat-float-text', { targetType: 'enemy', targetIndex: impIdx, text: 'PARRY', color: '#c8a84a' });
                 log.push({ type: "enemy", text: `${impEnemy.name} PARRIES! (MEL ${parryTarget}: rolled ${parryRoll})` });
                 reactionBlocked = true;
               } else {
@@ -2188,6 +2259,7 @@ export default function MissionSystem({ onNavigate, initialEncounter, initialPar
           const effectiveArmor = Math.max(0, impEnemy.armor || 0); // pen 0 for improvised
           const tb       = Math.floor((impEnemy.stats?.toughness || 0) / 10);
           const finalDmg = Math.max(1, rawDmg - effectiveArmor - tb);
+          eventBridge.emit('combat-float-text', { targetType: 'enemy', targetIndex: impIdx, text: `-${finalDmg}`, color: '#ff4444' });
           log.push({ type: "player", text: `Hit ${loc}! ${rawDmg} dmg (1d5+SB${sb}) − Armor ${effectiveArmor}${tb ? ` − TB${tb}` : ''} = ${finalDmg}` });
 
           const newEnemyWounds = [...enemyWounds];
@@ -2207,7 +2279,7 @@ export default function MissionSystem({ onNavigate, initialEncounter, initialPar
         }
       }
       setCombatLog(prevLog => [...prevLog, ...log]);
-      setTimeout(() => advanceInitiative(currentTurn, initiativeOrder, gridPositions.party, gridPositions.enemies, enemyWounds), 1000);
+      setTimeout(() => advanceInitiative(currentTurn, initiativeOrder, gridPositions.party, gridPositions.enemies, enemyWoundsRef.current), 1000);
       return;
     }
 
@@ -2259,6 +2331,7 @@ export default function MissionSystem({ onNavigate, initialEncounter, initialPar
     const modLabel = modParts.length ? ` [${modParts.join(', ')}]` : '';
 
     let log = [{ type: "player", text: `${char.name} attacks ${enemy.name} with ${weapon.name} (MEL ${char.stats.meleeSkill || 20}${modLabel} = ${targetNum}): rolled ${roll}... ${hit ? `HIT! (${dos} DoS)` : 'MISS!'}` }];
+    if (!hit) eventBridge.emit('combat-float-text', { targetType: 'enemy', targetIndex: enemyIdx, text: 'MISS', color: '#aaaaaa' });
 
     if (hit) {
       // 3. Hit Location (reverse the roll digits)
@@ -2281,6 +2354,7 @@ export default function MissionSystem({ onNavigate, initialEncounter, initialPar
         setEnemyReactionsUsed(prev => { const n = [...prev]; n[enemyIdx] = true; return n; });
         enemyReactionsUsedRef.current[enemyIdx] = true;
         if (dodgeRoll <= dodgeTarget) {
+          eventBridge.emit('combat-float-text', { targetType: 'enemy', targetIndex: enemyIdx, text: 'DODGE', color: '#60aadd' });
           log.push({ type: "enemy", text: `${enemy.name} DODGES! (${dodgeLbl} ${dodgeTarget}: rolled ${dodgeRoll})` });
           reactionBlocked = true;
         } else {
@@ -2289,6 +2363,7 @@ export default function MissionSystem({ onNavigate, initialEncounter, initialPar
             const parryRoll   = d100();
             const parryTarget = enemy.stats.meleeSkill || 20;
             if (parryRoll <= parryTarget) {
+              eventBridge.emit('combat-float-text', { targetType: 'enemy', targetIndex: enemyIdx, text: 'PARRY', color: '#c8a84a' });
               log.push({ type: "enemy", text: `${enemy.name} PARRIES! (MEL ${parryTarget}: rolled ${parryRoll})` });
               reactionBlocked = true;
             } else {
@@ -2307,6 +2382,7 @@ export default function MissionSystem({ onNavigate, initialEncounter, initialPar
         const effectiveArmor = Math.max(0, (enemy.armor || 0) - (weapon.pen || 0));
         const tb             = Math.floor((enemy.stats?.toughness || 0) / 10);
         const finalDmg       = Math.max(1, rawDmg - effectiveArmor - tb);
+        eventBridge.emit('combat-float-text', { targetType: 'enemy', targetIndex: enemyIdx, text: `-${finalDmg}`, color: '#ff4444' });
 
         log.push({ type: "player", text: `Hit ${loc}! ${rawDmg} dmg (${weapon.damage}+SB${sb}) − Armor ${effectiveArmor}${tb ? ` − TB${tb}` : ''} = ${finalDmg}` });
 
@@ -2332,7 +2408,7 @@ export default function MissionSystem({ onNavigate, initialEncounter, initialPar
     }
 
     setCombatLog(prevLog => [...prevLog, ...log]);
-    setTimeout(() => advanceInitiative(currentTurn, initiativeOrder, gridPositions.party, gridPositions.enemies, enemyWounds), 1000);
+    setTimeout(() => advanceInitiative(currentTurn, initiativeOrder, gridPositions.party, gridPositions.enemies, enemyWoundsRef.current), 1000);
   }
 
   // Shared ranged-attack resolver used by both ranged-style and melee-fallback AI paths.
@@ -2380,6 +2456,7 @@ export default function MissionSystem({ onNavigate, initialEncounter, initialPar
 
     const dos = hit ? Math.floor((targetNum - roll) / 10) : 0;
     log.push({ type: "enemy", text: `${enemy.name} [${modeLabel}${rounds > 1 ? ` ×${rounds}` : ''}] fires ${weapon.name} at ${target.name} — ${rangeBand} (${manhattan * 3}m) · RNG ${rns}${modLabel} = ${targetNum}: rolled ${roll}... ${hit ? `HIT! (${dos} DoS)` : 'MISS!'}` });
+    if (!hit && mode === 'single') eventBridge.emit('combat-float-text', { targetType: 'party', targetIndex: nearestIdx, text: 'MISS', color: '#aaaaaa' });
 
     const newPartyWounds = [...partyWoundsRef.current];
     for (let r = 0; r < rounds; r++) {
@@ -2389,6 +2466,7 @@ export default function MissionSystem({ onNavigate, initialEncounter, initialPar
       const roundHit      = roundRoll <= roundTarget;
       if (mode !== 'single') {
         log.push({ type: "enemy", text: `  Rnd ${r + 1}: target ${roundTarget}${recoilPenalty ? ` (−${recoilPenalty} recoil)` : ''} → rolled ${roundRoll}... ${roundHit ? 'HIT' : 'miss'}` });
+        setTimeout(() => eventBridge.emit('combat-float-text', { targetType: 'party', targetIndex: nearestIdx, text: roundHit ? 'HIT' : 'MISS', color: roundHit ? '#f87171' : '#aaaaaa' }), r * 120);
       }
       if (roundHit) {
         const loc    = hitLocation(roundRoll);
@@ -2409,6 +2487,7 @@ export default function MissionSystem({ onNavigate, initialEncounter, initialPar
           partyReactionsUsedRef.current = nr;
           setPartyReactionsUsed(nr);
           if (dodgeRoll <= dodgeTarget) {
+            eventBridge.emit('combat-float-text', { targetType: 'party', targetIndex: nearestIdx, text: 'DODGE', color: '#60aadd' });
             log.push({ type: "player", text: `${target.name} DODGES! (${dodgeLbl} ${dodgeTarget}: rolled ${dodgeRoll})` });
             reactionBlocked = true;
           } else {
@@ -2421,6 +2500,7 @@ export default function MissionSystem({ onNavigate, initialEncounter, initialPar
           const effectiveArmor = Math.max(0, charArmor - (weapon.pen || 0));
           const tb             = Math.floor((target.stats?.toughness || 0) / 10);
           const finalDmg       = Math.max(1, rawDmg - effectiveArmor - tb);
+          eventBridge.emit('combat-float-text', { targetType: 'party', targetIndex: nearestIdx, text: `-${finalDmg}`, color: '#ff4444' });
           log.push({ type: "enemy", text: `Hit ${loc}! ${rawDmg} dmg (${weapon.damage}) − Armor ${effectiveArmor}${tb ? ` − TB${tb}` : ''} = ${finalDmg} to ${target.name}` });
           newPartyWounds[nearestIdx] = (newPartyWounds[nearestIdx] || 0) + finalDmg;
           setPartyWounds([...newPartyWounds]);
@@ -2463,11 +2543,11 @@ export default function MissionSystem({ onNavigate, initialEncounter, initialPar
       return;
     }
     
-    // Check if enemy is already dead
-    const enemyWoundsCurrent = enemyWounds[actor.index] || 0;
+    // Check if enemy is already dead (use ref for always-current wounds)
+    const enemyWoundsCurrent = enemyWoundsRef.current[actor.index] || 0;
     if (enemyWoundsCurrent <= 0) {
       console.log("enemyTurn: enemy is dead, skipping turn");
-      setTimeout(() => advanceInitiative(actorIndex, init, partyPos, enemyPosList, enemyWounds), 100);
+      setTimeout(() => advanceInitiative(actorIndex, init, partyPos, enemyPosList, enemyWoundsRef.current), 100);
       return;
     }
     
@@ -2498,7 +2578,7 @@ export default function MissionSystem({ onNavigate, initialEncounter, initialPar
     if (nearestIdx === -1) {
       // No living targets
       setCombatLog(prevLog => [...prevLog, { type: "enemy", text: `${enemy.name} has no targets!` }]);
-      setTimeout(() => advanceInitiative(actorIndex, init, partyPos, enemyPosList, enemyWounds), 500);
+      setTimeout(() => advanceInitiative(actorIndex, init, partyPos, enemyPosList, enemyWoundsRef.current), 500);
       return;
     }
     
@@ -2621,6 +2701,7 @@ export default function MissionSystem({ onNavigate, initialEncounter, initialPar
       const dos  = hit ? Math.floor((effectiveEms - roll) / 10) : 0;
 
       log.push({ type: "enemy", text: `${enemy.name}${isPinned ? ' [PINNED −20]' : ''} attacks ${target.name} with ${eWeapon.name} (MEL ${effectiveEms}): rolled ${roll}... ${hit ? `HIT! (${dos} DoS)` : 'MISS!'}` });
+      if (!hit) eventBridge.emit('combat-float-text', { targetType: 'party', targetIndex: nearestIdx, text: 'MISS', color: '#aaaaaa' });
 
       if (hit) {
         const loc    = hitLocation(roll);
@@ -2638,6 +2719,7 @@ export default function MissionSystem({ onNavigate, initialEncounter, initialPar
           partyReactionsUsedRef.current = nr;
           setPartyReactionsUsed(nr);
           if (dodgeRoll <= dodgeTarget) {
+            eventBridge.emit('combat-float-text', { targetType: 'party', targetIndex: nearestIdx, text: 'DODGE', color: '#60aadd' });
             log.push({ type: "player", text: `${target.name} DODGES! (${dodgeLbl} ${dodgeTarget}: rolled ${dodgeRoll})` });
             reactionBlocked = true;
           } else {
@@ -2647,6 +2729,7 @@ export default function MissionSystem({ onNavigate, initialEncounter, initialPar
               const parryRoll   = d100();
               const parryTarget = Math.min(100, (target.stats.meleeSkill || 20) + parryBonus);
               if (parryRoll <= parryTarget) {
+                eventBridge.emit('combat-float-text', { targetType: 'party', targetIndex: nearestIdx, text: 'PARRY', color: '#c8a84a' });
                 log.push({ type: "player", text: `${target.name} PARRIES! (MEL ${parryTarget}${parryBonus ? ` [Shield+${parryBonus}]` : ''}: rolled ${parryRoll})` });
                 reactionBlocked = true;
               } else {
@@ -2664,6 +2747,7 @@ export default function MissionSystem({ onNavigate, initialEncounter, initialPar
           const effectiveArmor = Math.max(0, charArmor - (eWeapon.pen || 0));
           const tb             = Math.floor((target.stats?.toughness || 0) / 10);
           const finalDmg       = Math.max(1, rawDmg - effectiveArmor - tb);
+          eventBridge.emit('combat-float-text', { targetType: 'party', targetIndex: nearestIdx, text: `-${finalDmg}`, color: '#ff4444' });
           log.push({ type: "enemy", text: `Hit ${loc}! ${rawDmg} dmg (${eWeapon.damage}+SB${sb}) − Armor ${effectiveArmor}${tb ? ` − TB${tb}` : ''} = ${finalDmg} to ${target.name}` });
 
           const newPartyWounds = [...partyWoundsRef.current];
@@ -2703,7 +2787,7 @@ export default function MissionSystem({ onNavigate, initialEncounter, initialPar
     
     console.log(">>> enemyTurn END, calling advanceInitiative with", actorIndex);
     // Advance initiative with updated positions
-    setTimeout(() => advanceInitiative(actorIndex, init, partyPos, newEnemyPositions, enemyWounds), 1000);
+    setTimeout(() => advanceInitiative(actorIndex, init, partyPos, newEnemyPositions, enemyWoundsRef.current), 1000);
   }
 
   function completeMission(victory) {
@@ -2939,7 +3023,7 @@ export default function MissionSystem({ onNavigate, initialEncounter, initialPar
     setCombatLog(prevLog => [...prevLog, { type: "system", text: `FATE POINT SPENT! ${char.name} survives at 1 HP!` }]);
     
     // Advance initiative
-    setTimeout(() => advanceInitiative(currentTurn, initiativeOrder, gridPositions.party, gridPositions.enemies, enemyWounds), 500);
+    setTimeout(() => advanceInitiative(currentTurn, initiativeOrder, gridPositions.party, gridPositions.enemies, enemyWoundsRef.current), 500);
   }
 
   function confirmPartyMemberDeath(charIndex) {
@@ -2953,7 +3037,7 @@ export default function MissionSystem({ onNavigate, initialEncounter, initialPar
     setPendingFateIndex(null);
     
     // Advance initiative
-    setTimeout(() => advanceInitiative(currentTurn, initiativeOrder, gridPositions.party, gridPositions.enemies, enemyWounds), 500);
+    setTimeout(() => advanceInitiative(currentTurn, initiativeOrder, gridPositions.party, gridPositions.enemies, enemyWoundsRef.current), 500);
   }
 
   function handleNextPartyMember() {
