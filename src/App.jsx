@@ -1,6 +1,7 @@
 import { useState } from "react";
 import CharacterCreator from "./CharacterCreator";
 import CharacterRoster from "./CharacterRoster";
+import AgentRecruitment from "./AgentRecruitment";
 import MissionSystem from "./missionSystem";
 import CampaignSystem from "./campaign/CampaignSystem";
 
@@ -124,21 +125,21 @@ function HomeScreen({ onNavigate }) {
 
         {/* Nav buttons */}
         <div style={{ display: "flex", flexDirection: "column", alignItems: "center" }}>
-          <button className="menu-btn" onClick={() => onNavigate("creator")}>
-            Agent Dossier
-            <span className="menu-btn-sub">Register a new field operative</span>
+          <button className="menu-btn" onClick={() => onNavigate("new_campaign")}>
+            Start New Campaign
+            <span className="menu-btn-sub">Create Prefect, recruit agents, deploy to sector</span>
+          </button>
+          <button className="menu-btn" onClick={() => onNavigate("campaign")}>
+            Continue Campaign
+            <span className="menu-btn-sub">Resume planetary investigation and field operations</span>
           </button>
           <button className="menu-btn" onClick={() => onNavigate("roster")}>
             Operative Roster
             <span className="menu-btn-sub">Review assigned personnel</span>
           </button>
           <button className="menu-btn" onClick={() => onNavigate("missions")}>
-            Mission Deployment
-            <span className="menu-btn-sub">Receive and execute Council directives</span>
-          </button>
-          <button className="menu-btn" onClick={() => onNavigate("campaign")}>
-            Campaign
-            <span className="menu-btn-sub">Planetary investigation and field operations</span>
+            Quick Battle
+            <span className="menu-btn-sub">Standalone tactical engagement</span>
           </button>
           <button className="menu-btn" onClick={() => {
             if (window.confirm("This will erase all saved campaign data and your operative roster. Are you sure?")) {
@@ -167,7 +168,28 @@ function HomeScreen({ onNavigate }) {
 
 export default function App() {
   const [screen, setScreen] = useState("home");
-  if (screen === "creator")  return <CharacterCreator onNavigate={setScreen} />;
+  const [prefect, setPrefect] = useState(null);
+
+  // New Campaign flow: creator → recruitment → campaign
+  if (screen === "new_campaign" || screen === "creator") {
+    return (
+      <CharacterCreator
+        onNavigate={setScreen}
+        onComplete={(char) => { setPrefect(char); setScreen("recruit"); }}
+      />
+    );
+  }
+
+  if (screen === "recruit") {
+    return (
+      <AgentRecruitment
+        onNavigate={setScreen}
+        prefect={prefect}
+        onComplete={() => setScreen("campaign")}
+      />
+    );
+  }
+
   if (screen === "roster")   return <CharacterRoster onNavigate={setScreen} />;
   if (screen === "missions") return <MissionSystem onNavigate={setScreen} />;
   if (screen === "campaign") return <CampaignSystem onNavigate={setScreen} />;

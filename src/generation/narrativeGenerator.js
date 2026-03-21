@@ -112,6 +112,14 @@ export function threatNarrative(tier, previousTier) {
 
 // ── Combat start ─────────────────────────────────────────────────────────────
 export function combatStartNarrative(encounterType, entityName) {
+  if (encounterType === "leader_ambush") {
+    return pick([
+      `It's a trap! ${entityName} emerge from all directions — you're surrounded!`,
+      `The ground shakes as ${entityName} close in from every side! The Commander planned this!`,
+      `Hostiles on all flanks! ${entityName} has you encircled — fight your way out!`,
+      `"Cut them off!" — The Commander's ambush snaps shut. Enemies on all sides!`,
+    ]);
+  }
   if (encounterType === "ambush") {
     return pick([
       `${entityName} springs from concealment! Weapons hot — no time to think!`,

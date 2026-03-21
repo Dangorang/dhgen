@@ -57,6 +57,9 @@ export const INITIAL_STATE = {
   screen: "sector_map",
   previousScreen: null,
 
+  // Deployed squad (up to 8 characters from roster)
+  deployedSquad: [],
+
   // Combat context (for battle transitions)
   combatContext: null,
 };
@@ -196,11 +199,22 @@ function gameReducer(state, action) {
         npcs.squads = npcs.squads.map(s =>
           s.id === entityId ? { ...s, alive: false, hidden: false } : s
         );
+      } else if (entityType === "ambush" && npcs.loyalistLeader) {
+        // Remove triggered ambush from leader's list
+        npcs.loyalistLeader = {
+          ...npcs.loyalistLeader,
+          ambushesSet: (npcs.loyalistLeader.ambushesSet || []).map(a =>
+            a.id === entityId ? { ...a, triggered: true } : a
+          ),
+        };
       } else if (entityType === "leader" && npcs.loyalistLeader?.id === entityId) {
         npcs.loyalistLeader = { ...npcs.loyalistLeader, alive: false, hidden: false };
       }
       return { ...state, npcs };
     }
+
+    case "DEPLOY_SQUAD":
+      return { ...state, deployedSquad: action.squad };
 
     case "NAVIGATE":
       return { ...state, screen: action.screen };

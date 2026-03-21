@@ -78,11 +78,13 @@ export function processNPCTick(npcs, threatLevel, playerPos, currentRegionId, ti
     const leader = { ...npcs.loyalistLeader };
     const loc = { ...leader.location };
     const inSameRegion = loc.regionIndex === regionIdx;
+    const manpowerRemaining = (leader.manpower || 100) - (leader.manpowerUsed || 0);
 
+    // Leader moves each tick (patrol or flee)
     if (threatLevel >= 70 || desperation >= 3) {
-      // Desperate: flee if in same region, otherwise rally all forces
+      // Desperate: flee if in same region
       if (inSameRegion) {
-        const newPos = moveToward(loc, { gridX: 19, gridY: 0 }, 2); // flee faster
+        const newPos = moveToward(loc, { gridX: 19, gridY: 0 }, 2);
         loc.gridX = newPos.gridX;
         loc.gridY = newPos.gridY;
         events.push({
@@ -92,6 +94,10 @@ export function processNPCTick(npcs, threatLevel, playerPos, currentRegionId, ti
           region: `Region ${loc.regionIndex}`,
         });
       } else {
+        // Flee to a random edge
+        const newPos = moveToward(loc, { gridX: randInt(0, 19), gridY: 0 }, 2);
+        loc.gridX = newPos.gridX;
+        loc.gridY = newPos.gridY;
         events.push({
           actor: leader.name,
           action: "rally_all",
@@ -99,14 +105,76 @@ export function processNPCTick(npcs, threatLevel, playerPos, currentRegionId, ti
           region: `Region ${loc.regionIndex}`,
         });
       }
-    } else if (threatLevel >= 30 || desperation >= 1) {
-      // Uneasy+: deploy squads
+    } else {
+      // Move around (patrol/reposition)
+      const newPos = randomMove(loc);
+      loc.gridX = newPos.gridX;
+      loc.gridY = newPos.gridY;
+    }
+
+    // ── Spawn squads from manpower pool ──────────────────────────────────
+    // Leader commits forces based on desperation and threat
+    const spawnThreshold = desperation >= 3 ? 3 : desperation >= 2 ? 6 : desperation >= 1 ? 12 : 20;
+    if (manpowerRemaining >= 3 && tick > 0 && tick % spawnThreshold === 0) {
+      // Squad size scales with desperation
+      const squadSize = desperation >= 3 ? randInt(5, 8) : desperation >= 2 ? randInt(4, 6) : randInt(3, 5);
+      const actualSize = Math.min(squadSize, manpowerRemaining);
+
+      if (actualSize >= 3) {
+        const spawnRegion = inSameRegion ? regionIdx : loc.regionIndex;
+        const newSquad = {
+          id: `squad_spawned_${tick}_${Math.floor(Math.random() * 100000)}`,
+          name: `Loyalist Kill-Team ${String.fromCharCode(65 + (updatedNPCs.squads?.length || 0))}`,
+          mode: desperation >= 2 ? "hunt" : "patrol",
+          strength: actualSize,
+          location: {
+            regionIndex: spawnRegion,
+            gridX: clamp(loc.gridX + randInt(-3, 3), 1, 18),
+            gridY: clamp(loc.gridY + randInt(-3, 3), 1, 18),
+          },
+          hidden: true,
+          alive: true,
+          targetLocation: null,
+        };
+
+        if (!updatedNPCs.squads) updatedNPCs.squads = [];
+        updatedNPCs.squads = [...updatedNPCs.squads, newSquad];
+        leader.manpowerUsed = (leader.manpowerUsed || 0) + actualSize;
+
+        events.push({
+          actor: leader.name,
+          action: "spawn_squad",
+          details: desperation >= 2
+            ? `Leader is panicking — deploying ${actualSize}-strong kill-team! (${manpowerRemaining - actualSize} reserves remain)`
+            : `Leader deployed ${newSquad.name} (${actualSize} strong). ${manpowerRemaining - actualSize} reserves remain.`,
+          region: `Region ${spawnRegion}`,
+        });
+      }
+    }
+
+    // ── Set ambushes along movement path ────────────────────────────────
+    // Leader periodically plants ambushes at his current position
+    const ambushInterval = desperation >= 3 ? 4 : desperation >= 2 ? 8 : desperation >= 1 ? 15 : 25;
+    const ambushCost = desperation >= 2 ? randInt(4, 7) : randInt(2, 4);
+    if (manpowerRemaining >= ambushCost && tick > 0 && tick % ambushInterval === 0) {
+      const ambush = {
+        id: `ambush_${tick}_${Math.floor(Math.random() * 100000)}`,
+        regionIndex: loc.regionIndex,
+        gridX: loc.gridX,
+        gridY: loc.gridY,
+        strength: ambushCost,
+        tick: tick,
+        triggered: false,
+      };
+
+      if (!leader.ambushesSet) leader.ambushesSet = [];
+      leader.ambushesSet = [...leader.ambushesSet, ambush];
+      leader.manpowerUsed = (leader.manpowerUsed || 0) + ambushCost;
+
       events.push({
         actor: leader.name,
-        action: "deploy_squads",
-        details: desperation >= 2
-          ? "Leader is panicking — sending everything at the investigator!"
-          : "Leader ordered squads to hunt the investigator.",
+        action: "set_ambush",
+        details: `The Commander has set a ${ambushCost}-strong ambush at a strategic position. (${manpowerRemaining - ambushCost} reserves remain)`,
         region: `Region ${loc.regionIndex}`,
       });
     }
@@ -288,6 +356,33 @@ export function checkEncounters(npcs, playerPos, currentRegionId, perceptionStat
       const bonus = Math.floor((perceptionStat - 30) / 5) + desperation;
       if (roll + bonus >= dc) {
         encounters.push({ type: "squad_detected", entity: squad, distance: dist });
+      }
+    }
+  }
+
+  // Check leader-placed ambushes
+  if (npcs.loyalistLeader?.alive && npcs.loyalistLeader.ambushesSet) {
+    for (const ambush of npcs.loyalistLeader.ambushesSet) {
+      if (ambush.triggered) continue;
+      if (ambush.regionIndex !== regionIdx) continue;
+
+      const dist = Math.abs(ambush.gridX - playerPos.x) + Math.abs(ambush.gridY - playerPos.y);
+
+      if (dist <= 1) {
+        // Ambush triggered — player walked into or adjacent to it
+        encounters.push({
+          type: "leader_ambush",
+          entity: {
+            id: ambush.id,
+            name: `Loyalist Ambush Force`,
+            strength: ambush.strength,
+            alive: true,
+            hidden: true,
+            location: { regionIndex: ambush.regionIndex, gridX: ambush.gridX, gridY: ambush.gridY },
+          },
+          surprise: true,
+          ambushLayout: "surround", // signals encirclement positioning
+        });
       }
     }
   }

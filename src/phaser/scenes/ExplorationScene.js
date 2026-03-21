@@ -234,6 +234,33 @@ export default class ExplorationScene extends Phaser.Scene {
         this._npcGfx.fillCircle(px, py, 2);
       }
     }
+
+    // Ambushes — yellow/red triangle markers (debug: shows hidden ambush positions)
+    if (npcs.loyalistLeader?.ambushesSet) {
+      for (const ambush of npcs.loyalistLeader.ambushesSet) {
+        if (ambush.triggered) continue;
+        if (ambush.regionIndex !== regionIndex) continue;
+        const px = ambush.gridX * TILE_SIZE + TILE_SIZE / 2;
+        const py = ambush.gridY * TILE_SIZE + TILE_SIZE / 2;
+        // Triangle marker for ambush
+        this._npcGfx.fillStyle(0xc0a020, 0.6);
+        this._npcGfx.fillTriangle(
+          px, py - 8,        // top
+          px - 7, py + 5,    // bottom-left
+          px + 7, py + 5     // bottom-right
+        );
+        this._npcGfx.lineStyle(2, 0xffd040, 0.9);
+        this._npcGfx.strokeTriangle(
+          px, py - 8,
+          px - 7, py + 5,
+          px + 7, py + 5
+        );
+        // Exclamation mark
+        this._npcGfx.fillStyle(0xffffff, 0.8);
+        this._npcGfx.fillRect(px - 1, py - 5, 2, 5);
+        this._npcGfx.fillRect(px - 1, py + 2, 2, 2);
+      }
+    }
   }
 
   _drawPlayer(pos) {
