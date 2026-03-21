@@ -7,6 +7,7 @@ import { eventBridge } from "./phaser/EventBridge.js";
 import { createCombatState, resetTurnFlags, applyMovement, getBaseMovement, getSprintMovement } from "./combat/combatStates.js";
 import { ACTIONS, validateAction, spendAction, getAvailableActions, isTurnComplete, getAimedShotBonus } from "./combat/actionEconomy.js";
 import { hasProficiency, getBurstMovePenalty, getSingleShotMovePenalty, getDoubleTapAccuracy, requiresStationary, canFireHMGUnbraced } from "./combat/proficiency.js";
+import { GRENADE_TYPES, getGrenadeRange, resolveGrenadeThrow, getBlastTiles, getCharactersInBlast, shouldDetonateInHand } from "./combat/grenadeSystem.js";
 
 const TIER_COLOR = {
   Routine:   "#4a8060",
@@ -400,6 +401,8 @@ export default function MissionSystem({ onNavigate, initialEncounter, initialPar
   const [enemyPinned, setEnemyPinned] = useState([]);     // boolean[] — pinned enemies get -20 on next attack
   const [partyReactionsUsed,  setPartyReactionsUsed]  = useState([]); // boolean[] — party member used their 1 reaction this round
   const [enemyReactionsUsed,  setEnemyReactionsUsed]  = useState([]); // boolean[] — enemy used their 1 reaction this round
+  const [grenadeMode, setGrenadeMode] = useState(false);   // true when targeting grenade throw on grid
+  const [roundCounter, setRoundCounter] = useState(0);     // increments each time initiative loops
   const [terrain, setTerrain] = useState([]); // terrain pieces: platforms + cover barriers
   const terrainRef = useRef([]);
   useEffect(() => { terrainRef.current = terrain; }, [terrain]);
@@ -1060,6 +1063,26 @@ export default function MissionSystem({ onNavigate, initialEncounter, initialPar
               const halfActionsLeft = 2 - turnState.half_actions_spent;
               const canFullAction = turnState.half_actions_spent === 0;
 
+              // Grenade targeting overlay
+              if (grenadeMode) {
+                const throwRange = getGrenadeRange(actorChar?.stats?.strength || 20);
+                return (
+                  <>
+                    <div style={{ fontFamily: "'Cinzel', serif", fontSize: 11, color: "#ff6644", marginBottom: 4 }}>
+                      THROW GRENADE — Frag
+                    </div>
+                    <div style={{ fontFamily: "'IM Fell English', serif", fontSize: 10, color: "#aa4420", marginBottom: 8 }}>
+                      Click a tile to throw (range: {throwRange} tiles, beyond = −20 penalty)
+                    </div>
+                    <button
+                      onClick={() => setGrenadeMode(false)}
+                      style={{ borderColor: "#5a3e1b", color: "#8a7050", padding: "6px 14px", fontSize: 10 }}>
+                      Cancel
+                    </button>
+                  </>
+                );
+              }
+
               // Shooting mode overlay
               if (shootingMode) {
                 const modeDisplay = fireMode === 'semi' ? 'SEMI-AUTO BURST'
@@ -1117,6 +1140,7 @@ export default function MissionSystem({ onNavigate, initialEncounter, initialPar
                     {turnState.braced && <span style={{ color: '#6ee7b7', marginLeft: 6 }}>[BRACED]</span>}
                     {turnState.in_cover && <span style={{ color: '#60aadd', marginLeft: 6 }}>[IN COVER]</span>}
                     {turnState.prone && <span style={{ color: '#cc80cc', marginLeft: 6 }}>[PRONE]</span>}
+                    {turnState.grenade_primed && <span style={{ color: '#ff6644', marginLeft: 6 }}>[GRENADE PRIMED!]</span>}
                   </div>
 
                   <div style={{ display: "flex", gap: 6, flexWrap: "wrap", marginBottom: 6 }}>
@@ -1245,6 +1269,32 @@ export default function MissionSystem({ onNavigate, initialEncounter, initialPar
                           </button>
                         )}
                       </>
+                    )}
+
+                    {/* ── GRENADE ACTIONS (half actions) ── */}
+                    {halfActionsLeft > 0 && !turnState.grenade_primed && validateAction('PREPARE_GRENADE', turnState, actorChar, aw).valid && (
+                      <button
+                        onClick={() => {
+                          setTurnState(prev => ({
+                            ...spendAction(prev, 'PREPARE_GRENADE'),
+                            grenade_primed: true,
+                            grenade_prime_turn: roundCounter,
+                          }));
+                          setCombatLog(prev => [...prev, { type: "player", text: `${actorChar?.name} primes a Frag Grenade! (throw this turn or next — or it detonates!)` }]);
+                        }}
+                        style={{ borderColor: "#8a4a2a", color: "#dd7744", padding: "6px 12px", fontSize: 10 }}>
+                        Prime Grenade
+                      </button>
+                    )}
+                    {halfActionsLeft > 0 && turnState.grenade_primed && validateAction('THROW_GRENADE', turnState, actorChar, aw).valid && (
+                      <button
+                        onClick={() => {
+                          setGrenadeMode(true);
+                          setCombatLog(prev => [...prev, { type: "system", text: `Select target tile for grenade (range: ${getGrenadeRange(actorChar?.stats?.strength || 20)} tiles)` }]);
+                        }}
+                        style={{ borderColor: "#aa3a1a", color: "#ff6644", padding: "6px 12px", fontSize: 10, fontWeight: 'bold' }}>
+                        Throw Grenade!
+                      </button>
                     )}
 
                     {/* ── WEAPON SWAP (half action) ── */}
@@ -1712,6 +1762,12 @@ export default function MissionSystem({ onNavigate, initialEncounter, initialPar
     // Shooting mode: player is picking a target
     if (shootingMode) {
       playerRangedShot(x, y);
+      return;
+    }
+
+    // Grenade mode: player is picking a blast target tile
+    if (grenadeMode) {
+      playerGrenadeThrow(x, y);
       return;
     }
 
@@ -2246,6 +2302,7 @@ export default function MissionSystem({ onNavigate, initialEncounter, initialPar
     // If we've gone through all combatants, loop back (new round)
     if (nextTurn >= init.length) {
       nextTurn = 0;
+      setRoundCounter(prev => prev + 1);
       // Skip dead at start of new round too
       while (nextTurn < init.length) {
         const entry = init[nextTurn];
@@ -2275,7 +2332,43 @@ export default function MissionSystem({ onNavigate, initialEncounter, initialPar
     setRemainingAction('full');  // Legacy: Each new turn starts with a full action available
     setFireMode('single');       // Reset fire mode to single
     // New action economy: reset turn state, preserve persistent flags
-    setTurnState(prev => resetTurnFlags(prev));
+    setTurnState(prev => {
+      const reset = resetTurnFlags(prev);
+      // Grenade detonation-in-hand check (spec 3.1)
+      if (shouldDetonateInHand(reset, roundCounter)) {
+        // Will be handled in UI — flag stays, detonation resolves at turn start
+        setCombatLog(prevLog => [...prevLog, { type: 'system', text: `GRENADE DETONATES IN HAND! Held too long!` }]);
+        // Auto-detonate at holder's position
+        const incomingActor = init[nextTurn];
+        if (incomingActor?.type === 'party') {
+          const pos = partyPos[incomingActor.index];
+          const blastTiles = getBlastTiles(pos, GRENADE_TYPES.FRAG.blastRadius, 20);
+          const { partyHit, enemyHit } = getCharactersInBlast(blastTiles, partyPos, enemyPos);
+          const dmgLog = [];
+          for (const pi of partyHit) {
+            const rawDmg = rollDamageDice(GRENADE_TYPES.FRAG.damage);
+            const tb = Math.floor((party[pi]?.stats?.toughness || 0) / 10);
+            const finalDmg = Math.max(1, rawDmg - (party[pi]?.armor || 0) - tb);
+            dmgLog.push({ type: 'system', text: `${party[pi]?.name} takes ${finalDmg} from in-hand detonation!` });
+            setPartyWounds(pw => { const nw = [...pw]; nw[pi] = (nw[pi] || 0) + finalDmg; return nw; });
+          }
+          const newEW = [...eWounds];
+          for (const ei of enemyHit) {
+            if (newEW[ei] <= 0) continue;
+            const rawDmg = rollDamageDice(GRENADE_TYPES.FRAG.damage);
+            const tb = Math.floor((encounter?.enemies?.[ei]?.stats?.toughness || 0) / 10);
+            const finalDmg = Math.max(1, rawDmg - (encounter?.enemies?.[ei]?.armor || 0) - tb);
+            dmgLog.push({ type: 'system', text: `${encounter?.enemies?.[ei]?.name || 'Enemy'} takes ${finalDmg} from grenade detonation!` });
+            newEW[ei] = Math.max(0, newEW[ei] - finalDmg);
+          }
+          setCombatLog(prevLog => [...prevLog, ...dmgLog]);
+          setEnemyWounds(newEW);
+        }
+        return { ...reset, grenade_primed: false, grenade_prime_turn: -1 };
+      }
+      return reset;
+    });
+    setGrenadeMode(false);
     
     // Check if all enemies are dead
     const allEnemyDead = eWounds.every(w => w <= 0);
@@ -2642,6 +2735,92 @@ export default function MissionSystem({ onNavigate, initialEncounter, initialPar
       }
     }
     return true;
+  }
+
+  // ── GRENADE THROW (grid-click targeting) ───────────────────────
+  function playerGrenadeThrow(targetX, targetY) {
+    const actor = initiativeOrder[currentTurn];
+    if (!actor || actor.type !== 'party') return;
+    const actIdx = actor.index;
+    const char = party[actIdx];
+    if (!char) return;
+    if (!turnState.grenade_primed) return;
+
+    setGrenadeMode(false);
+    const attackerPos = gridPositions.party[actIdx];
+    const grenade = GRENADE_TYPES.FRAG; // Default to frag for now
+
+    const result = resolveGrenadeThrow(
+      { ...char, x: attackerPos.x, y: attackerPos.y },
+      { x: targetX, y: targetY },
+      grenade,
+      20
+    );
+
+    const log = [...result.log];
+    const blastTiles = getBlastTiles(result.landingTile, grenade.blastRadius, 20);
+    const { partyHit, enemyHit } = getCharactersInBlast(blastTiles, gridPositions.party, gridPositions.enemies);
+
+    // Emit blast visual
+    eventBridge.emit('combat-shot', { fromPos: attackerPos, toPos: result.landingTile, count: 1, isHit: true, weaponClass: 'Grenade' });
+
+    if (result.outcome === 'fumble') {
+      log.push({ type: 'system', text: `WARNING: Fumble! Check friendly fire!` });
+    }
+
+    const newEW = [...enemyWounds];
+    let allDefeated = false;
+
+    // Apply blast damage to enemies in radius
+    for (const ei of enemyHit) {
+      if (newEW[ei] <= 0) continue;
+      const rawDmg = rollDamageDice(grenade.damage);
+      const target = encounter.enemies[ei];
+      const effectiveArmor = Math.max(0, (target.armor || 0) - (grenade.pen || 0));
+      const tb = Math.floor((target.stats?.toughness || 0) / 10);
+      const finalDmg = Math.max(1, rawDmg - effectiveArmor - tb);
+      log.push({ type: 'player', text: `${grenade.name} hits ${target.name}! ${rawDmg} dmg − Armor ${effectiveArmor}${tb ? ` − TB${tb}` : ''} = ${finalDmg}` });
+      eventBridge.emit('combat-float-text', { targetType: 'enemy', targetIndex: ei, text: `-${finalDmg}`, color: '#ff8844' });
+      eventBridge.emit('combat-hit', { targetType: 'enemy', targetIndex: ei });
+      newEW[ei] = Math.max(0, newEW[ei] - finalDmg);
+      if (newEW[ei] <= 0) {
+        eventBridge.emit('combat-death', { targetType: 'enemy', targetIndex: ei });
+        log.push({ type: 'player', text: `The ${target.name} is DEFEATED!` });
+      }
+    }
+
+    // Apply blast damage to party members in radius (friendly fire)
+    for (const pi of partyHit) {
+      const target = party[pi];
+      if (!target) continue;
+      const rawDmg = rollDamageDice(grenade.damage);
+      const effectiveArmor = Math.max(0, (target.armor || 0) - (grenade.pen || 0));
+      const tb = Math.floor((target.stats?.toughness || 0) / 10);
+      const finalDmg = Math.max(1, rawDmg - effectiveArmor - tb);
+      log.push({ type: 'system', text: `FRIENDLY FIRE! ${grenade.name} hits ${target.name}! ${finalDmg} damage!` });
+      eventBridge.emit('combat-float-text', { targetType: 'party', targetIndex: pi, text: `-${finalDmg}`, color: '#ff4444' });
+      // Apply wounds to party member
+      setPartyWounds(prev => {
+        const nw = [...prev];
+        nw[pi] = (nw[pi] || 0) + finalDmg;
+        return nw;
+      });
+    }
+
+    if (newEW.every(w => w <= 0)) allDefeated = true;
+    setEnemyWounds(newEW);
+    setCombatLog(prev => [...prev, ...log]);
+
+    // Clear grenade state, spend action
+    setTurnState(prev => ({
+      ...spendAction(prev, 'THROW_GRENADE'),
+      grenade_primed: false,
+      grenade_prime_turn: -1,
+    }));
+
+    if (!allDefeated) {
+      setTimeout(() => advanceInitiative(currentTurn, initiativeOrder, gridPositions.party, gridPositions.enemies, newEW), 1200);
+    }
   }
 
   function enemyTurn(turnIndex, initiativeArray, partyPositions, enemyPositions) {
