@@ -4,6 +4,10 @@ import { generateEncounter, getEnvironmentFromMission } from "./enemyData";
 import { getWeaponById } from "./weaponData";
 import PhaserGame from "./phaser/PhaserGame.jsx";
 import { eventBridge } from "./phaser/EventBridge.js";
+import { createCombatState, resetTurnFlags, applyMovement, getBaseMovement, getSprintMovement } from "./combat/combatStates.js";
+import { ACTIONS, validateAction, spendAction, getAvailableActions, isTurnComplete, getAimedShotBonus } from "./combat/actionEconomy.js";
+import { hasProficiency, getBurstMovePenalty, getSingleShotMovePenalty, getDoubleTapAccuracy, requiresStationary, canFireHMGUnbraced } from "./combat/proficiency.js";
+import { GRENADE_TYPES, getGrenadeRange, resolveGrenadeThrow, getBlastTiles, getCharactersInBlast, shouldDetonateInHand } from "./combat/grenadeSystem.js";
 
 const TIER_COLOR = {
   Routine:   "#4a8060",
@@ -15,6 +19,28 @@ const TIER_ORDER = { Routine: 0, Dangerous: 1, Deadly: 2 };
 
 function d100() { return Math.floor(Math.random() * 100) + 1; }
 function d6()   { return Math.floor(Math.random() * 6) + 1; }
+function clamp(v, lo, hi) { return Math.max(lo, Math.min(hi, v)); }
+
+// Place N units in a 2-column layout that fits within the 20x20 grid (y: 1-18)
+function placeUnitsOnGrid(count, colA, colB) {
+  if (count === 0) return [];
+  const rows = Math.ceil(count / 2);
+  // Evenly space rows across usable vertical range (y 1-18)
+  const usableHeight = 17; // y 1 to 18
+  const spacing = rows > 1 ? Math.min(3, Math.floor(usableHeight / (rows - 1))) : 0;
+  const totalHeight = (rows - 1) * spacing;
+  const startY = Math.max(1, Math.floor((usableHeight - totalHeight) / 2) + 1);
+  const positions = [];
+  for (let i = 0; i < count; i++) {
+    const row = Math.floor(i / 2);
+    const col = i % 2;
+    positions.push({
+      x: clamp(col === 0 ? colA : colB, 0, 19),
+      y: clamp(startY + row * spacing, 1, 18),
+    });
+  }
+  return positions;
+}
 
 // ── Combat helpers ────────────────────────────────────────────
 function rollDamageDice(damageStr, psyRating = 0) {
@@ -50,9 +76,15 @@ function getCharDodgeTarget(char) {
   const agi = char.stats?.agility    || 20;
   const per = char.stats?.perception || 20;
   const psy = char.stats?.psyRating  || 0;
-  if (char.class === 'Adept')            return { target: agi + per + psy, label: 'Precognition Dodge' };
-  if (char.class === 'Veteran Infantry') return { target: agi,             label: 'Trained Dodge'      };
-  return { target: Math.floor(agi / 2),                                    label: 'Base Dodge'          };
+  const cls = (char.class || char.role || '').toLowerCase();
+  // Sanctioned (psionic) get Precognition dodge
+  if (cls.includes('sanctioned') || cls === 'adept')
+    return { target: agi + per + psy, label: 'Precognition Dodge' };
+  // Combat-trained roles get full AGI dodge
+  if (cls.includes('veteran') || cls.includes('prefect') || cls.includes('demotech') || cls.includes('corpsman') || cls.includes('infiltrator'))
+    return { target: agi, label: 'Trained Dodge' };
+  // Artificer and others get half AGI
+  return { target: Math.floor(agi / 2), label: 'Base Dodge' };
 }
 // Enemies: ability "Hyper Drugged Awareness" = AGI+20, skill "Trained Dodge" = AGI, else Base (AGI/2)
 function getEnemyDodgeTarget(enemy) {
@@ -325,6 +357,7 @@ export default function MissionSystem({ onNavigate, initialEncounter, initialPar
   const [encounter, setEncounter]       = useState(null);
   const [combatPhase, setCombatPhase]    = useState(null);
   const [combatLog, setCombatLog]       = useState([]);
+  const [logMinimized, setLogMinimized] = useState(false);
   const [fateSpentInMission, setFateSpentInMission] = useState(false);
   const [currentCheckIndex, setCurrentCheckIndex] = useState(0);
   const [checkResults, setCheckResults] = useState([]);
@@ -346,8 +379,11 @@ export default function MissionSystem({ onNavigate, initialEncounter, initialPar
   const [gridPositions, setGridPositions] = useState({ party: [], enemies: [] });
   const [selectedMovementTarget, setSelectedMovementTarget] = useState(null);
   
-  // Combat sub-phase: 'movement' or 'attack'
+  // Combat sub-phase: 'movement' or 'attack' (legacy, kept for backward compat during refactor)
   const [combatAction, setCombatAction] = useState('movement');
+
+  // New action economy: per-character turn state
+  const [turnState, setTurnState] = useState(() => createCombatState());
   
   // Party member needing fate resolution
   const [pendingFateIndex, setPendingFateIndex] = useState(null);
@@ -365,6 +401,8 @@ export default function MissionSystem({ onNavigate, initialEncounter, initialPar
   const [enemyPinned, setEnemyPinned] = useState([]);     // boolean[] — pinned enemies get -20 on next attack
   const [partyReactionsUsed,  setPartyReactionsUsed]  = useState([]); // boolean[] — party member used their 1 reaction this round
   const [enemyReactionsUsed,  setEnemyReactionsUsed]  = useState([]); // boolean[] — enemy used their 1 reaction this round
+  const [grenadeMode, setGrenadeMode] = useState(false);   // true when targeting grenade throw on grid
+  const [roundCounter, setRoundCounter] = useState(0);     // increments each time initiative loops
   const [terrain, setTerrain] = useState([]); // terrain pieces: platforms + cover barriers
   const terrainRef = useRef([]);
   useEffect(() => { terrainRef.current = terrain; }, [terrain]);
@@ -384,11 +422,13 @@ export default function MissionSystem({ onNavigate, initialEncounter, initialPar
   const [currentTurn, setCurrentTurn] = useState(0); // Index in initiativeOrder
 
   // Always-current refs — prevent stale closures in setTimeout callbacks
+  const enemyWoundsRef         = useRef([]);
   const enemyPinnedRef         = useRef([]);
   const partyReactionsUsedRef  = useRef([]);
   const enemyReactionsUsedRef  = useRef([]);
   // Keep refs in sync
   useEffect(() => { partyWoundsRef.current          = partyWounds;          }, [partyWounds]);
+  useEffect(() => { enemyWoundsRef.current          = enemyWounds;          }, [enemyWounds]);
   useEffect(() => { enemyPinnedRef.current          = enemyPinned;          }, [enemyPinned]);
   useEffect(() => { partyReactionsUsedRef.current   = partyReactionsUsed;   }, [partyReactionsUsed]);
   useEffect(() => { enemyReactionsUsedRef.current   = enemyReactionsUsed;   }, [enemyReactionsUsed]);
@@ -423,14 +463,16 @@ export default function MissionSystem({ onNavigate, initialEncounter, initialPar
     ? (partyWounds[currentActor?.index] || 0) >= (party[currentActor?.index]?.wounds || 10)
     : (enemyWounds[currentActor?.index] || 0) <= 0;
 
-  // Movement highlight — computed when it's a player's movement phase
+  // Movement highlight — computed when player can still move this turn
   const movementHighlight = (() => {
-    if (phase !== 'combat' || !isPlayerTurn || combatAction !== 'movement') return null;
+    if (phase !== 'combat' || !isPlayerTurn) return null;
+    // Show movement highlight if character hasn't moved and movement isn't blocked
+    if (turnState.moved_this_turn || turnState.blocks_movement) return null;
     const actorIdx = currentActor?.index;
     const actorPos = gridPositions.party[actorIdx];
     if (!actorPos) return null;
     const agi = party[actorIdx]?.stats?.agility || 20;
-    const range = Math.floor(agi / 10) + 4;
+    const range = turnState.sprinting ? getSprintMovement(agi) : getBaseMovement(agi);
     return { actorPos, range };
   })();
 
@@ -1005,115 +1047,47 @@ export default function MissionSystem({ onNavigate, initialEncounter, initialPar
           ) : "Combat Starting..."}
         </div>
         
-        {/* Combat Log */}
-        <div ref={combatLogRef} style={{ border: "1px solid #1e3d5c", background: "rgba(8,15,28,0.9)", marginBottom: 16, maxHeight: 250, overflowY: "auto" }}>
-          <div style={{ background: "linear-gradient(90deg,#080f1c,#0c1824,#080f1c)", borderBottom: "1px solid #1e3d5c", padding: "8px 16px", fontFamily: "'Share Tech Mono', monospace", fontSize: 10, color: "#c8a84a", letterSpacing: 3 }}>
-            — ENGAGEMENT LOG —
-          </div>
-          {combatLog.length === 0 ? (
-            <div style={{ padding: 16, textAlign: "center", fontFamily: "'Share Tech Mono', monospace", fontSize: 11, color: "#2e5a82" }}>
-              Engagement active. Awaiting orders.
-            </div>
-          ) : (
-            combatLog.map((log, i) => (
-              <div key={i} style={{ 
-                padding: "8px 16px", 
-                borderBottom: "1px solid #1a1005", 
-                fontFamily: "'IM Fell English', serif", 
-                fontSize: 12,
-                background: log.type === "player" ? "rgba(40,80,40,0.2)" : log.type === "enemy" ? "rgba(80,30,30,0.2)" : "transparent",
-                color: log.type === "player" ? "#6ee7b7" : log.type === "enemy" ? "#f87171" : "#a89070",
-                borderLeft: log.type === "player" ? "3px solid #6ee7b7" : log.type === "enemy" ? "3px solid #f87171" : "3px solid #5a3e1b"
-              }}>
-                <span style={{ fontWeight: "bold", marginRight: 8 }}>
-                  {log.type === "player" ? "▶ YOU" : log.type === "enemy" ? "▶ ENEMY" : "◆"}
-                </span>
-                {log.text}
-              </div>
-            ))
-          )}
-        </div>
-        
-        {/* Combat Actions - only show when no pending fate */}
+        {/* Combat Actions - New Action Economy (only show when no pending fate) */}
         {pendingFateIndex === null && !allEnemiesDead && isPlayerTurn && (
           <div style={{ border: "1px solid #3a2510", background: "rgba(15,10,4,0.85)", padding: "12px 16px", marginBottom: 16 }}>
-            {combatAction === 'movement' && (() => {
+            {(() => {
               const actIdx = currentActor?.index;
               const actorChar = party[actIdx] || {};
               const aw = getActiveWeapon(actorChar, actIdx, activeWeapons);
               const isRanged = aw && aw.type !== 'Melee';
               const agi = actorChar?.stats?.agility || 20;
-              const moveRange = Math.floor(agi / 10) + 4;
+              const moveRange = turnState.sprinting ? getSprintMovement(agi) : getBaseMovement(agi);
               const weapons = getCharWeapons(actorChar);
-              return (
-                <>
-                  <div style={{ fontFamily: "'Cinzel', serif", fontSize: 11, color: "#6a8060", marginBottom: 4 }}>
-                    MOVEMENT PHASE — Click grid to move
-                  </div>
-                  <div style={{ fontFamily: "'IM Fell English', serif", fontSize: 10, color: "#5a4020", marginBottom: 8 }}>
-                    Range: {moveRange} sq · Readied: {isRanged ? '🔫' : '⚔'} <span style={{ color: isRanged ? '#60aadd' : '#c09050' }}>{aw?.name || 'Fists'}</span>
-                  </div>
+              const rof = isRanged ? parseRoF(aw?.rateOfFire) : null;
+              const canMove = !turnState.moved_this_turn && !turnState.blocks_movement;
+              const halfActionsLeft = 2 - turnState.half_actions_spent;
+              const canFullAction = turnState.half_actions_spent === 0;
 
-                  {/* Weapon swap */}
-                  {weapons.length > 1 && (
-                    <div style={{ marginBottom: 8 }}>
-                      <div style={{ fontSize: 9, color: "#5a4a30", marginBottom: 4, letterSpacing: 1, textTransform: 'uppercase' }}>Swap Weapon (costs move action):</div>
-                      <div style={{ display: "flex", gap: 6, flexWrap: "wrap" }}>
-                        {weapons.map(w => {
-                          const isActive = w.id === (activeWeapons[actIdx] ?? weapons[0]?.id);
-                          const wRanged = w.type !== 'Melee';
-                          return (
-                            <button key={w.id}
-                              disabled={isActive}
-                              onClick={() => {
-                                setActiveWeapons(prev => ({ ...prev, [actIdx]: w.id }));
-                                setCombatLog(prev => [...prev, { type: "player", text: `${actorChar?.name} readies ${w.name}.` }]);
-                                setRemainingAction('half');
-                                setCombatAction('attack');
-                              }}
-                              style={{
-                                borderColor: isActive ? '#4a3a18' : (wRanged ? '#2a5a8a' : '#6a4820'),
-                                color: isActive ? '#5a4a28' : (wRanged ? '#60aadd' : '#c09040'),
-                                padding: "5px 10px", fontSize: 10,
-                                opacity: isActive ? 0.55 : 1,
-                                cursor: isActive ? 'not-allowed' : 'pointer',
-                              }}>
-                              {isActive ? '✓ ' : ''}{wRanged ? '🔫' : '⚔'} {w.name}
-                            </button>
-                          );
-                        })}
-                      </div>
+              // Grenade targeting overlay
+              if (grenadeMode) {
+                const throwRange = getGrenadeRange(actorChar?.stats?.strength || 20);
+                return (
+                  <>
+                    <div style={{ fontFamily: "'Cinzel', serif", fontSize: 11, color: "#ff6644", marginBottom: 4 }}>
+                      THROW GRENADE — Frag
                     </div>
-                  )}
-
-                  <div style={{ display: "flex", gap: 10, flexWrap: "wrap" }}>
+                    <div style={{ fontFamily: "'IM Fell English', serif", fontSize: 10, color: "#aa4420", marginBottom: 8 }}>
+                      Click a tile to throw (range: {throwRange} tiles, beyond = −20 penalty)
+                    </div>
                     <button
-                      onClick={() => { setRemainingAction('full'); setCombatAction('attack'); }}
-                      style={{ borderColor: "#a07030", color: "#c09040", padding: "8px 16px", fontSize: 11 }}>
-                      Skip Movement
+                      onClick={() => setGrenadeMode(false)}
+                      style={{ borderColor: "#5a3e1b", color: "#8a7050", padding: "6px 14px", fontSize: 10 }}>
+                      Cancel
                     </button>
-                    {isRanged && (
-                      <button
-                        onClick={() => { setAiming(true); setRemainingAction('half'); setCombatAction('attack'); }}
-                        style={{ borderColor: "#3a6a9a", color: "#60aadd", padding: "8px 16px", fontSize: 11 }}>
-                        🎯 AIM (+20 to hit)
-                      </button>
-                    )}
-                  </div>
-                </>
-              );
-            })()}
+                  </>
+                );
+              }
 
-            {combatAction === 'attack' && (() => {
-              const actIdx = currentActor?.index;
-              const actorChar = party[actIdx] || {};
-              const aw = getActiveWeapon(actorChar, actIdx, activeWeapons);
-              const isRanged = aw && aw.type !== 'Melee';
-
+              // Shooting mode overlay
               if (shootingMode) {
-                const modeDisplay = fireMode === 'semi' ? '💥 SEMI-AUTO BURST'
-                  : fireMode === 'full' ? '🔥 FULL AUTO'
-                  : aiming ? '🎯 AIMED SHOT' : `🔫 SHOOTING`;
+                const modeDisplay = fireMode === 'semi' ? 'SEMI-AUTO BURST'
+                  : fireMode === 'full' ? 'FULL AUTO'
+                  : aiming ? 'AIMED SHOT' : 'SHOOTING';
                 return (
                   <>
                     <div style={{ fontFamily: "'Cinzel', serif", fontSize: 11, color: "#ff8830", marginBottom: 4 }}>
@@ -1121,7 +1095,7 @@ export default function MissionSystem({ onNavigate, initialEncounter, initialPar
                     </div>
                     <div style={{ fontFamily: "'IM Fell English', serif", fontSize: 10, color: "#aa6030", marginBottom: 8 }}>
                       Click an orange enemy tile on the grid to fire
-                      {fireMode === 'semi' ? ' (+0 to hit, +1 hit/2 DoS)' : fireMode === 'full' ? ' (−10 to hit, +1 hit/DoS, jam 94–100)' : aiming ? ' (+20 to hit)' : ''}
+                      {fireMode === 'semi' ? ' (+0 to hit, +1 hit/2 DoS)' : fireMode === 'full' ? ' (−10 to hit, +1 hit/DoS, jam 94–100)' : aiming ? ` (+${getAimedShotBonus(actorChar?.stats?.perception || 20) * 10} Aim)` : ''}
                     </div>
                     <button
                       onClick={() => { setShootingMode(false); setFireMode('single'); }}
@@ -1132,165 +1106,283 @@ export default function MissionSystem({ onNavigate, initialEncounter, initialPar
                 );
               }
 
-              if (isRanged) {
-                const rof = parseRoF(aw?.rateOfFire);
-                const canFullAction = remainingAction === 'full';
-                return (
-                  <>
-                    <div style={{ fontFamily: "'Cinzel', serif", fontSize: 11, color: aiming ? "#60aadd" : "#6a8060", marginBottom: 4 }}>
-                      {aiming ? "🎯 AIMED — " : "ATTACK PHASE — "}{aw?.name}
-                      {!canFullAction && <span style={{ color: "#5a4020", fontSize: 9, marginLeft: 8 }}>(Half action used — Single Shot only)</span>}
-                    </div>
-                    <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
-                      {/* Single Shot — always available (half action) */}
-                      <button
-                        onClick={() => { setFireMode('single'); setShootingMode(true); }}
-                        style={{ borderColor: aiming ? "#2a5a9a" : "#3a7aaa", color: aiming ? "#60aadd" : "#80c0dd", padding: "8px 14px", fontSize: 10 }}>
-                        {aiming ? "🎯 Aimed Single (+20)" : "🔫 Single Shot"}
-                      </button>
-                      {/* Semi-Auto — full action only */}
-                      {canFullAction && rof.semiAuto > 0 && (
-                        <button
-                          onClick={() => { setFireMode('semi'); setShootingMode(true); }}
-                          style={{ borderColor: "#5a7a30", color: "#90cc50", padding: "8px 14px", fontSize: 10 }}>
-                          💥 Semi-Auto ×{rof.semiAuto}
-                        </button>
-                      )}
-                      {/* Full Auto — full action only */}
-                      {canFullAction && rof.fullAuto > 0 && (
-                        <button
-                          onClick={() => { setFireMode('full'); setShootingMode(true); }}
-                          style={{ borderColor: "#8a4a20", color: "#e08040", padding: "8px 14px", fontSize: 10 }}>
-                          🔥 Full Auto ×{rof.fullAuto}
-                        </button>
-                      )}
-                      {/* Suppressive Fire — full action, only if weapon has auto */}
-                      {canFullAction && (rof.fullAuto > 0 || rof.semiAuto > 0) && (
-                        <button
-                          onClick={() => playerSuppressiveFire()}
-                          style={{ borderColor: "#6a2a6a", color: "#cc80cc", padding: "8px 14px", fontSize: 10 }}>
-                          🌀 Suppressive Fire
-                        </button>
-                      )}
-                      {/* Improvised melee */}
-                      <button
-                        onClick={() => playerAttack('improvised')}
-                        style={{ borderColor: "#7a5020", color: "#a07040", padding: "8px 14px", fontSize: 10 }}>
-                        ⚔ Improvised Strike
-                      </button>
-                      {/* Skip */}
-                      <button
-                        onClick={() => {
-                          setCombatLog(prev => [...prev, { type: "player", text: `${actorChar?.name} holds position.` }]);
-                          setAiming(false);
-                          setFireMode('single');
-                          setTimeout(() => advanceInitiative(currentTurn, initiativeOrder, gridPositions.party, gridPositions.enemies, enemyWounds), 500);
-                        }}
-                        style={{ borderColor: "#5a3e1b", color: "#8a7050", padding: "8px 14px", fontSize: 10 }}>
-                        Skip Attack
-                      </button>
-                    </div>
-                  </>
-                );
-              }
-
-              // Melee weapon active — compute adjacent enemies for target chooser
-              const attackerPos = gridPositions.party[actIdx];
-              const adjacentEnemiesUI = [];
-              if (attackerPos) {
-                enemyWounds.forEach((w, idx) => {
-                  if (w > 0) {
-                    const ep = gridPositions.enemies[idx];
-                    if (ep && Math.max(Math.abs(ep.x - attackerPos.x), Math.abs(ep.y - attackerPos.y)) <= 1) {
-                      adjacentEnemiesUI.push({ index: idx, enemy: encounter?.enemies[idx] });
-                    }
-                  }
-                });
-              }
-
               return (
                 <>
-                  <div style={{ fontFamily: "'Cinzel', serif", fontSize: 11, color: "#6a8060", marginBottom: 4 }}>
-                    ATTACK PHASE — {aw?.name}
-                  </div>
-                  <div style={{ fontFamily: "'IM Fell English', serif", fontSize: 10, color: "#5a4020", marginBottom: 8 }}>
-                    ⚔ Melee · Standard (+0) · All-Out (+20 to hit, enemy cannot react)
+                  {/* Turn header — action slots indicator */}
+                  <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 8 }}>
+                    <div style={{ fontFamily: "'Cinzel', serif", fontSize: 11, color: "#6a8060" }}>
+                      {actorChar?.name}'s TURN
+                    </div>
+                    <div style={{ display: "flex", gap: 6, alignItems: "center" }}>
+                      {/* Action slots display */}
+                      <span style={{ fontFamily: "'Share Tech Mono', monospace", fontSize: 9, color: "#5a4a30", letterSpacing: 1 }}>ACTIONS:</span>
+                      {[0, 1].map(i => (
+                        <div key={i} style={{
+                          width: 12, height: 12, borderRadius: 2,
+                          border: `1px solid ${i < halfActionsLeft ? '#6a8060' : '#3a2a10'}`,
+                          background: i < halfActionsLeft ? 'rgba(106,128,96,0.4)' : 'rgba(20,10,4,0.5)',
+                        }} />
+                      ))}
+                      {/* Move indicator */}
+                      <span style={{
+                        fontFamily: "'Share Tech Mono', monospace", fontSize: 8, marginLeft: 4,
+                        color: canMove ? '#60aadd' : '#5a3e1b',
+                      }}>
+                        {canMove ? `MOVE:${moveRange}` : turnState.moved_this_turn ? 'MOVED' : 'LOCKED'}
+                      </span>
+                    </div>
                   </div>
 
-                  {adjacentEnemiesUI.length === 0 ? (
-                    <>
-                      <div style={{ fontFamily: "'IM Fell English', serif", fontSize: 10, color: "#7a5030", marginBottom: 8 }}>
-                        No enemy in reach — move closer to attack.
+                  {/* Readied weapon */}
+                  <div style={{ fontFamily: "'IM Fell English', serif", fontSize: 10, color: "#5a4020", marginBottom: 8 }}>
+                    Readied: {isRanged ? '' : ''} <span style={{ color: isRanged ? '#60aadd' : '#c09050' }}>{aw?.name || 'Fists'}</span>
+                    {turnState.moved_this_turn && <span style={{ color: '#a07030', marginLeft: 6 }}>(moved — on-the-move penalties apply)</span>}
+                    {turnState.braced && <span style={{ color: '#6ee7b7', marginLeft: 6 }}>[BRACED]</span>}
+                    {turnState.in_cover && <span style={{ color: '#60aadd', marginLeft: 6 }}>[IN COVER]</span>}
+                    {turnState.prone && <span style={{ color: '#cc80cc', marginLeft: 6 }}>[PRONE]</span>}
+                    {turnState.grenade_primed && <span style={{ color: '#ff6644', marginLeft: 6 }}>[GRENADE PRIMED!]</span>}
+                  </div>
+
+                  <div style={{ display: "flex", gap: 6, flexWrap: "wrap", marginBottom: 6 }}>
+                    {/* ── FREE MOVE ── */}
+                    {canMove && (
+                      <div style={{ fontFamily: "'Share Tech Mono', monospace", fontSize: 8, color: '#60aadd', padding: "2px 6px", border: "1px solid #1e4a7a", borderRadius: 2, alignSelf: 'center' }}>
+                        Click grid to move ({moveRange} sq)
                       </div>
-                      <button
-                        onClick={() => {
-                          setCombatLog(prev => [...prev, { type: "player", text: `${actorChar?.name} holds position.` }]);
-                          setTimeout(() => advanceInitiative(currentTurn, initiativeOrder, gridPositions.party, gridPositions.enemies, enemyWounds), 500);
-                        }}
-                        style={{ borderColor: "#5a3e1b", color: "#8a7050", padding: "10px 18px" }}>
-                        Skip Attack
-                      </button>
-                    </>
-                  ) : adjacentEnemiesUI.length === 1 ? (
-                    <div style={{ display: "flex", gap: 10, flexWrap: "wrap" }}>
-                      <button
-                        onClick={() => playerAttack('standard')}
-                        style={{ borderColor: "#6a8060", color: "#80c080", padding: "10px 18px" }}>
-                        ⚔ Standard Attack
-                      </button>
-                      <button
-                        onClick={() => playerAttack('allout')}
-                        style={{ borderColor: "#c04040", color: "#e06060", padding: "10px 18px" }}>
-                        ⚔⚔ All-Out Attack
-                      </button>
-                      <button
-                        onClick={() => {
-                          setCombatLog(prev => [...prev, { type: "player", text: `${actorChar?.name} holds position.` }]);
-                          setTimeout(() => advanceInitiative(currentTurn, initiativeOrder, gridPositions.party, gridPositions.enemies, enemyWounds), 500);
-                        }}
-                        style={{ borderColor: "#5a3e1b", color: "#8a7050", padding: "10px 18px" }}>
-                        Skip Attack
-                      </button>
-                    </div>
-                  ) : (
-                    // 2+ adjacent enemies — show per-target rows
-                    <>
-                      <div style={{ fontFamily: "'IM Fell English', serif", fontSize: 9, color: "#806040", marginBottom: 6 }}>
-                        Choose target:
-                      </div>
-                      {adjacentEnemiesUI.map(ae => (
-                        <div key={ae.index} style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 6 }}>
-                          <span style={{ fontFamily: "'Cinzel', serif", fontSize: 9, color: "#c07050", minWidth: 80 }}>
-                            {ae.enemy?.name}
-                          </span>
+                    )}
+
+                    {/* ── RANGED ACTIONS ── */}
+                    {isRanged && halfActionsLeft > 0 && (
+                      <>
+                        {/* Single Shot (half) */}
+                        {rof?.single && validateAction('SINGLE_SHOT', turnState, actorChar, aw).valid && (
                           <button
-                            onClick={() => playerAttack('standard', ae.index)}
-                            style={{ borderColor: "#6a8060", color: "#80c080", padding: "6px 12px", fontSize: 10 }}>
-                            ⚔ Standard
+                            onClick={() => { setFireMode('single'); setShootingMode(true); }}
+                            style={{ borderColor: "#3a7aaa", color: "#80c0dd", padding: "6px 12px", fontSize: 10 }}>
+                            Single Shot
                           </button>
+                        )}
+                        {/* Double-Tap: two single shots at same target (uses both half actions) */}
+                        {rof?.single && canFullAction && validateAction('SINGLE_SHOT', turnState, actorChar, aw).valid && (
                           <button
-                            onClick={() => playerAttack('allout', ae.index)}
-                            style={{ borderColor: "#c04040", color: "#e06060", padding: "6px 12px", fontSize: 10 }}>
-                            ⚔⚔ All-Out
+                            onClick={() => { setFireMode('doubletap'); setShootingMode(true); }}
+                            style={{ borderColor: "#2a7a9a", color: "#70d0dd", padding: "6px 12px", fontSize: 10 }}>
+                            Double-Tap (+10 2nd)
                           </button>
-                        </div>
-                      ))}
+                        )}
+                        {/* Burst Fire (half) */}
+                        {rof?.semiAuto > 0 && validateAction('BURST_FIRE', turnState, actorChar, aw).valid && (
+                          <button
+                            onClick={() => { setFireMode('semi'); setShootingMode(true); }}
+                            style={{ borderColor: "#5a7a30", color: "#90cc50", padding: "6px 12px", fontSize: 10 }}>
+                            Burst x{rof.semiAuto}
+                          </button>
+                        )}
+                      </>
+                    )}
+
+                    {/* ── FULL ACTIONS (ranged) ── */}
+                    {isRanged && canFullAction && (
+                      <>
+                        {/* Full Auto (full, blocks_movement) */}
+                        {rof?.fullAuto > 0 && validateAction('FULL_AUTO_FIRE', turnState, actorChar, aw).valid && (
+                          <button
+                            onClick={() => { setFireMode('full'); setShootingMode(true); setTurnState(prev => spendAction(prev, 'FULL_AUTO_FIRE')); }}
+                            style={{ borderColor: "#8a4a20", color: "#e08040", padding: "6px 12px", fontSize: 10 }}>
+                            Full Auto x{rof.fullAuto}
+                          </button>
+                        )}
+                        {/* Aimed Shot (full, blocks_movement) */}
+                        {validateAction('AIMED_SHOT', turnState, actorChar, aw).valid && (
+                          <button
+                            onClick={() => { setAiming(true); setFireMode('single'); setShootingMode(true); setTurnState(prev => spendAction(prev, 'AIMED_SHOT')); }}
+                            style={{ borderColor: "#2a5a9a", color: "#60aadd", padding: "6px 12px", fontSize: 10 }}>
+                            Aimed Shot (+{getAimedShotBonus(actorChar?.stats?.perception || 20) * 10})
+                          </button>
+                        )}
+                        {/* Suppressive Fire (full) */}
+                        {(rof?.fullAuto > 0 || rof?.semiAuto > 0) && validateAction('SUPPRESSIVE_FIRE', turnState, actorChar, aw).valid && (
+                          <button
+                            onClick={() => playerSuppressiveFire()}
+                            style={{ borderColor: "#6a2a6a", color: "#cc80cc", padding: "6px 12px", fontSize: 10 }}>
+                            Suppressive Fire
+                          </button>
+                        )}
+                      </>
+                    )}
+
+                    {/* ── MELEE ACTIONS ── */}
+                    {halfActionsLeft > 0 && (
+                      <>
+                        {/* Standard melee (half) */}
+                        <button
+                          onClick={() => playerAttack('standard')}
+                          style={{ borderColor: "#6a8060", color: "#80c080", padding: "6px 12px", fontSize: 10 }}>
+                          Melee Strike
+                        </button>
+                        {/* Improvised melee with ranged weapon */}
+                        {isRanged && (
+                          <button
+                            onClick={() => playerAttack('improvised')}
+                            style={{ borderColor: "#7a5020", color: "#a07040", padding: "6px 12px", fontSize: 10 }}>
+                            Improvised Strike
+                          </button>
+                        )}
+                      </>
+                    )}
+
+                    {/* ── SUPPORT ACTIONS ── */}
+                    {halfActionsLeft > 0 && (
+                      <>
+                        {/* Brace */}
+                        {!turnState.braced && validateAction('BRACE', turnState, actorChar, aw).valid && (
+                          <button
+                            onClick={() => {
+                              setTurnState(prev => spendAction(prev, 'BRACE'));
+                              setCombatLog(prev => [...prev, { type: "player", text: `${actorChar?.name} braces weapon.` }]);
+                            }}
+                            style={{ borderColor: "#4a6a4a", color: "#6aa06a", padding: "6px 12px", fontSize: 10 }}>
+                            Brace
+                          </button>
+                        )}
+                        {/* Take Cover */}
+                        {!turnState.in_cover && validateAction('TAKE_COVER', turnState, actorChar, aw).valid && (
+                          <button
+                            onClick={() => {
+                              setTurnState(prev => spendAction(prev, 'TAKE_COVER'));
+                              setCombatLog(prev => [...prev, { type: "player", text: `${actorChar?.name} takes cover.` }]);
+                            }}
+                            style={{ borderColor: "#2a5a8a", color: "#60aadd", padding: "6px 12px", fontSize: 10 }}>
+                            Take Cover
+                          </button>
+                        )}
+                        {/* Stand/Prone */}
+                        {validateAction('STAND_OR_PRONE', turnState, actorChar, aw).valid && (
+                          <button
+                            onClick={() => {
+                              const wasProne = turnState.prone;
+                              setTurnState(prev => spendAction(prev, 'STAND_OR_PRONE'));
+                              setCombatLog(prev => [...prev, { type: "player", text: `${actorChar?.name} ${wasProne ? 'stands up' : 'goes prone'}.` }]);
+                            }}
+                            style={{ borderColor: "#6a4a6a", color: "#aa80aa", padding: "6px 12px", fontSize: 10 }}>
+                            {turnState.prone ? 'Stand Up' : 'Go Prone'}
+                          </button>
+                        )}
+                      </>
+                    )}
+
+                    {/* ── GRENADE ACTIONS (half actions) ── */}
+                    {halfActionsLeft > 0 && !turnState.grenade_primed && validateAction('PREPARE_GRENADE', turnState, actorChar, aw).valid && (
                       <button
                         onClick={() => {
-                          setCombatLog(prev => [...prev, { type: "player", text: `${actorChar?.name} holds position.` }]);
-                          setTimeout(() => advanceInitiative(currentTurn, initiativeOrder, gridPositions.party, gridPositions.enemies, enemyWounds), 500);
+                          setTurnState(prev => ({
+                            ...spendAction(prev, 'PREPARE_GRENADE'),
+                            grenade_primed: true,
+                            grenade_prime_turn: roundCounter,
+                          }));
+                          setCombatLog(prev => [...prev, { type: "player", text: `${actorChar?.name} primes a Frag Grenade! (throw this turn or next — or it detonates!)` }]);
                         }}
-                        style={{ borderColor: "#5a3e1b", color: "#8a7050", padding: "6px 14px", fontSize: 10, marginTop: 4 }}>
-                        Skip Attack
+                        style={{ borderColor: "#8a4a2a", color: "#dd7744", padding: "6px 12px", fontSize: 10 }}>
+                        Prime Grenade
                       </button>
-                    </>
-                  )}
+                    )}
+                    {halfActionsLeft > 0 && turnState.grenade_primed && validateAction('THROW_GRENADE', turnState, actorChar, aw).valid && (
+                      <button
+                        onClick={() => {
+                          setGrenadeMode(true);
+                          setCombatLog(prev => [...prev, { type: "system", text: `Select target tile for grenade (range: ${getGrenadeRange(actorChar?.stats?.strength || 20)} tiles)` }]);
+                        }}
+                        style={{ borderColor: "#aa3a1a", color: "#ff6644", padding: "6px 12px", fontSize: 10, fontWeight: 'bold' }}>
+                        Throw Grenade!
+                      </button>
+                    )}
+
+                    {/* ── WEAPON SWAP (half action) ── */}
+                    {weapons.length > 1 && halfActionsLeft > 0 && weapons.filter(w => w.id !== (activeWeapons[actIdx] ?? weapons[0]?.id)).map(w => (
+                      <button key={w.id}
+                        onClick={() => {
+                          setActiveWeapons(prev => ({ ...prev, [actIdx]: w.id }));
+                          setTurnState(prev => spendAction(prev, 'SWITCH_WEAPON'));
+                          setCombatLog(prev => [...prev, { type: "player", text: `${actorChar?.name} readies ${w.name}.` }]);
+                        }}
+                        style={{ borderColor: w.type !== 'Melee' ? '#2a5a8a' : '#6a4820', color: w.type !== 'Melee' ? '#60aadd' : '#c09040', padding: "6px 12px", fontSize: 10 }}>
+                        Switch: {w.name}
+                      </button>
+                    ))}
+
+                    {/* ── FULL ACTIONS (utility) ── */}
+                    {canFullAction && (
+                      <>
+                        {/* Sprint */}
+                        {!turnState.moved_this_turn && validateAction('SPRINT', turnState, actorChar, aw).valid && (
+                          <button
+                            onClick={() => {
+                              setTurnState(prev => spendAction(prev, 'SPRINT'));
+                              setCombatLog(prev => [...prev, { type: "player", text: `${actorChar?.name} sprints! (double move, no attacks)` }]);
+                            }}
+                            style={{ borderColor: "#6a6a30", color: "#aaaa50", padding: "6px 12px", fontSize: 10 }}>
+                            Sprint (x2 move)
+                          </button>
+                        )}
+                      </>
+                    )}
+                  </div>
+
+                  {/* ── END TURN ── */}
+                  <div style={{ display: "flex", gap: 8, marginTop: 4 }}>
+                    <button
+                      onClick={() => {
+                        setCombatLog(prev => [...prev, { type: "player", text: `${actorChar?.name} ends turn.` }]);
+                        setAiming(false);
+                        setFireMode('single');
+                        setTimeout(() => advanceInitiative(currentTurn, initiativeOrder, gridPositions.party, gridPositions.enemies, enemyWounds), 500);
+                      }}
+                      style={{ borderColor: "#5a3e1b", color: "#8a7050", padding: "6px 14px", fontSize: 10 }}>
+                      End Turn
+                    </button>
+                  </div>
                 </>
               );
             })()}
           </div>
         )}
-        
+
+        {/* Combat Log (minimizable) */}
+        <div style={{ border: "1px solid #1e3d5c", background: "rgba(8,15,28,0.9)", marginBottom: 16 }}>
+          <div
+            onClick={() => setLogMinimized(prev => !prev)}
+            style={{ background: "linear-gradient(90deg,#080f1c,#0c1824,#080f1c)", borderBottom: logMinimized ? "none" : "1px solid #1e3d5c", padding: "8px 16px", fontFamily: "'Share Tech Mono', monospace", fontSize: 10, color: "#c8a84a", letterSpacing: 3, cursor: "pointer", display: "flex", justifyContent: "space-between", alignItems: "center", userSelect: "none" }}>
+            <span>— ENGAGEMENT LOG —</span>
+            <span style={{ fontSize: 12, color: "#4a6a8a" }}>{logMinimized ? "▶" : "▼"}</span>
+          </div>
+          {!logMinimized && (
+            <div ref={combatLogRef} style={{ maxHeight: 250, overflowY: "auto" }}>
+              {combatLog.length === 0 ? (
+                <div style={{ padding: 16, textAlign: "center", fontFamily: "'Share Tech Mono', monospace", fontSize: 11, color: "#2e5a82" }}>
+                  Engagement active. Awaiting orders.
+                </div>
+              ) : (
+                combatLog.map((log, i) => (
+                  <div key={i} style={{
+                    padding: "8px 16px",
+                    borderBottom: "1px solid #1a1005",
+                    fontFamily: "'IM Fell English', serif",
+                    fontSize: 12,
+                    background: log.type === "player" ? "rgba(40,80,40,0.2)" : log.type === "enemy" ? "rgba(80,30,30,0.2)" : "transparent",
+                    color: log.type === "player" ? "#6ee7b7" : log.type === "enemy" ? "#f87171" : "#a89070",
+                    borderLeft: log.type === "player" ? "3px solid #6ee7b7" : log.type === "enemy" ? "3px solid #f87171" : "3px solid #5a3e1b"
+                  }}>
+                    <span style={{ fontWeight: "bold", marginRight: 8 }}>
+                      {log.type === "player" ? "▶ YOU" : log.type === "enemy" ? "▶ ENEMY" : "◆"}
+                    </span>
+                    {log.text}
+                  </div>
+                ))
+              )}
+            </div>
+          )}
+        </div>
+
         {/* Combat End States - Fate Resolution */}
         {pendingFateIndex !== null && (
           <div style={{ border: "1px solid #7a1a1a", background: "rgba(60,10,10,0.8)", padding: 20, textAlign: "center" }}>
@@ -1365,16 +1457,9 @@ export default function MissionSystem({ onNavigate, initialEncounter, initialPar
     setEnemyWounds(generatedEncounter.enemies.map(e => e.wounds));
     setCurrentEnemy(0);
     
-    // Initialize grid positions
-    const partyPositions = party.map((p, i) => ({
-      x: 1 + (i % 2) * 2,
-      y: 5 + i * 3,
-    }));
-    
-    const enemyPositions = generatedEncounter.enemies.map((e, i) => ({
-      x: 18 - (i % 2) * 2,
-      y: 5 + i * 3,
-    }));
+    // Initialize grid positions — 2-column layout, evenly spaced to fit grid
+    const partyPositions = placeUnitsOnGrid(party.length, 1, 3, true);
+    const enemyPositions = placeUnitsOnGrid(generatedEncounter.enemies.length, 16, 18, false);
     
     const generatedTerrain = generateTerrain();
     setTerrain(generatedTerrain);
@@ -1395,16 +1480,18 @@ export default function MissionSystem({ onNavigate, initialEncounter, initialPar
     setEnemyReactionsUsed(generatedEncounter.enemies.map(() => false));
     setRemainingAction('full');
     setFireMode('single');
+    setTurnState(createCombatState());
 
-    // Calculate initiative
+    // Calculate initiative: AGI + PER + d10 (spec Part 1.1)
     const initiative = [];
-    
+    const d10 = () => Math.floor(Math.random() * 10) + 1;
+
     party.forEach((p, i) => {
       const agi = p.stats.agility || 20;
       const per = p.stats.perception || 20;
-      const stat = Math.max(agi, per);
-      const roll = d100();
-      const total = roll + stat;
+      const roll = d10();
+      const stat = agi + per;
+      const total = stat + roll;
       initiative.push({
         type: 'party',
         index: i,
@@ -1418,9 +1505,9 @@ export default function MissionSystem({ onNavigate, initialEncounter, initialPar
     generatedEncounter.enemies.forEach((e, i) => {
       const agi = e.stats.agility || 20;
       const per = e.stats.perception || 20;
-      const stat = Math.max(agi, per);
-      const roll = d100();
-      const total = roll + stat;
+      const roll = d10();
+      const stat = agi + per;
+      const total = stat + roll;
       initiative.push({
         type: 'enemy',
         index: i,
@@ -1464,6 +1551,9 @@ export default function MissionSystem({ onNavigate, initialEncounter, initialPar
   function startExternalCombat() {
     const combatParty = initialParty;
     const combatEncounter = initialEncounter;
+    // Check if this is a surround ambush from the campaign context
+    // We read from the parent component's props (the CampaignSystem passes combatContext)
+    const isSurroundAmbush = combatEncounter._ambushLayout === "surround";
 
     setPartyWounds(combatParty.map(() => 0));
     setCurrentPartyMember(0);
@@ -1475,14 +1565,43 @@ export default function MissionSystem({ onNavigate, initialEncounter, initialPar
     setCurrentEnemy(0);
 
     // Initialize grid positions
-    const partyPositions = combatParty.map((p, i) => ({
-      x: 1 + (i % 2) * 2,
-      y: 5 + i * 3,
-    }));
-    const enemyPositions = combatEncounter.enemies.map((e, i) => ({
-      x: 18 - (i % 2) * 2,
-      y: 5 + i * 3,
-    }));
+    let partyPositions, enemyPositions;
+
+    if (isSurroundAmbush) {
+      // SURROUND LAYOUT: Party grouped in center, enemies on all four sides
+      const cx = 10, cy = 10;
+      // Party in a tight cluster around center (2-wide columns)
+      const partyRows = Math.ceil(combatParty.length / 2);
+      const partyStartY = cy - Math.floor(partyRows / 2);
+      partyPositions = combatParty.map((p, i) => ({
+        x: cx - 1 + (i % 2) * 2,
+        y: clamp(partyStartY + Math.floor(i / 2), 1, 18),
+      }));
+
+      // Distribute enemies around the perimeter in 4 cardinal groups
+      const surroundPositions = [];
+      const enemyCount = combatEncounter.enemies.length;
+      const sides = [
+        { baseX: cx - 1, baseY: cy - 5, dx: 1, dy: 0 },  // North
+        { baseX: cx - 1, baseY: cy + 5, dx: 1, dy: 0 },  // South
+        { baseX: cx - 5, baseY: cy - 1, dx: 0, dy: 1 },  // West
+        { baseX: cx + 5, baseY: cy - 1, dx: 0, dy: 1 },  // East
+      ];
+
+      for (let i = 0; i < enemyCount; i++) {
+        const side = sides[i % 4];
+        const offset = Math.floor(i / 4);
+        surroundPositions.push({
+          x: clamp(side.baseX + side.dx * offset, 1, 18),
+          y: clamp(side.baseY + side.dy * offset, 1, 18),
+        });
+      }
+      enemyPositions = surroundPositions;
+    } else {
+      // Standard layout: party on left, enemies on right
+      partyPositions = placeUnitsOnGrid(combatParty.length, 1, 3, true);
+      enemyPositions = placeUnitsOnGrid(combatEncounter.enemies.length, 16, 18, false);
+    }
 
     const generatedTerrain = generateTerrain();
     setTerrain(generatedTerrain);
@@ -1646,34 +1765,42 @@ export default function MissionSystem({ onNavigate, initialEncounter, initialPar
       return;
     }
 
-    // Only handle if it's a player's turn in movement mode
-    if (combatAction !== 'movement') return;
-    
+    // Grenade mode: player is picking a blast target tile
+    if (grenadeMode) {
+      playerGrenadeThrow(x, y);
+      return;
+    }
+
+    // Movement is FREE — allowed any time the player hasn't moved and movement isn't blocked
     const actor = initiativeOrder[currentTurn];
     if (!actor || actor.type !== 'party') return;
-    
+    if (turnState.moved_this_turn || turnState.blocks_movement) {
+      setCombatLog(prev => [...prev, { type: "system", text: "Already moved this turn!" }]);
+      return;
+    }
+
     const actorIdx = actor.index;
     const currentPos = gridPositions.party[actorIdx];
     const agi = party[actorIdx].stats.agility || 20;
-    const moveRange = Math.floor(agi / 10) + 4;
-    
+    const moveRange = turnState.sprinting ? getSprintMovement(agi) : getBaseMovement(agi);
+
     // Calculate Manhattan distance
     const distance = Math.abs(x - currentPos.x) + Math.abs(y - currentPos.y);
-    
+
     // Check if move is valid (within range and not occupied)
     if (distance > moveRange) {
       console.log(`Too far! Distance: ${distance}, Range: ${moveRange}`);
       setCombatLog(prev => [...prev, { type: "system", text: `Too far! Movement range: ${moveRange}` }]);
       return;
     }
-    
+
     // Check if position is occupied by another party member
     const occupied = gridPositions.party.some((p, i) => i !== actorIdx && p.x === x && p.y === y);
     if (occupied) {
       setCombatLog(prev => [...prev, { type: "system", text: "Position occupied by another party member!" }]);
       return;
     }
-    
+
     // Check if position is occupied by an enemy
     const enemyOccupied = gridPositions.enemies.some(e => e.x === x && e.y === y);
     if (enemyOccupied) {
@@ -1686,16 +1813,15 @@ export default function MissionSystem({ onNavigate, initialEncounter, initialPar
       setCombatLog(prev => [...prev, { type: "system", text: "That tile is blocked by a barrier!" }]);
       return;
     }
-    
-    // Valid move - update position
+
+    // Valid move - update position (FREE action, no action slot cost)
     const newPartyPositions = [...gridPositions.party];
     newPartyPositions[actorIdx] = { x, y };
     setGridPositions(prev => ({ ...prev, party: newPartyPositions }));
-    
-    setCombatLog(prev => [...prev, { type: "player", text: `${party[actorIdx].name} moves ${distance} squares.` }]);
-    setRemainingAction('half'); // Moving costs the half action
-    // After moving, switch to attack phase
-    setCombatAction('attack');
+
+    setCombatLog(prev => [...prev, { type: "player", text: `${party[actorIdx].name} moves ${distance} squares. (free move)` }]);
+    // Apply movement to turn state (marks moved_this_turn, clears braced)
+    setTurnState(prev => applyMovement(prev));
   }
   
   // ── RANGED SHOT (grid-click targeting) ──────────────────────────
@@ -1755,12 +1881,110 @@ export default function MissionSystem({ onNavigate, initialEncounter, initialPar
 
     setShootingMode(false);
     const per = char.stats.perception || 20;
+    const agi = char.stats.agility || 20;
     const rof = parseRoF(activeWep.rateOfFire);
-    const mode = fireMode; // 'single' | 'semi' | 'full' — captured from state closure
+    const mode = fireMode; // 'single' | 'semi' | 'full' | 'doubletap' — captured from state closure
 
-    // To-hit modifier: range band (base) + aim bonus (single only) + full-auto penalty + elevation
-    let hitMod = rangeMod;
-    if (aiming && mode === 'single') hitMod += 20;
+    // ── Proficiency-based on-the-move penalties (spec Part 2) ──
+    const charRole = char.role || '';
+    const weaponCat = activeWep.category || '';
+    const hasProf = hasProficiency(charRole, weaponCat);
+    let movePenalty = 0;
+    if (turnState.moved_this_turn && mode !== 'doubletap') {
+      // Vigil marksman cannot fire after moving (should be blocked by UI, but safety check)
+      if (requiresStationary(weaponCat)) {
+        setCombatLog(prev => [...prev, { type: "system", text: `${activeWep.name} cannot fire after moving!` }]);
+        return;
+      }
+      if (mode === 'semi' || mode === 'full') {
+        movePenalty = getBurstMovePenalty(agi, hasProf);
+      } else {
+        movePenalty = getSingleShotMovePenalty(agi, hasProf);
+      }
+    }
+
+    // ── Double-tap: resolve as two sequential single shots ──
+    if (mode === 'doubletap') {
+      const dtMovePenalty = turnState.moved_this_turn ? getSingleShotMovePenalty(agi, hasProf) : 0;
+      const { shot1Accuracy, shot2Accuracy } = getDoubleTapAccuracy(per + rangeMod, agi, hasProf, turnState.moved_this_turn);
+      const tgt1 = Math.min(100, Math.max(5, shot1Accuracy));
+      const tgt2 = Math.min(100, Math.max(5, shot2Accuracy));
+      const roll1 = d100(), roll2 = d100();
+      const hit1 = roll1 <= tgt1, hit2 = roll2 <= tgt2;
+      let dtLog = [];
+      const dtModParts = [];
+      if (rangeMod !== 0) dtModParts.push(`${rangeMod > 0 ? '+' : ''}${rangeMod} ${rangeBand}`);
+      if (dtMovePenalty !== 0) dtModParts.push(`${dtMovePenalty} move`);
+      const dtModStr = dtModParts.length ? ` [${dtModParts.join(', ')}]` : '';
+
+      dtLog.push({ type: "player", text: `${char.name} [Double-Tap] at ${target.name} — ${rangeBand} (${distTiles * 3}m)${dtModStr}` });
+      dtLog.push({ type: "player", text: `  Shot 1: target ${tgt1} → rolled ${roll1}... ${hit1 ? 'HIT!' : 'MISS!'}` });
+      dtLog.push({ type: "player", text: `  Shot 2: target ${tgt2} (+10 follow-through) → rolled ${roll2}... ${hit2 ? 'HIT!' : 'MISS!'}` });
+
+      eventBridge.emit('combat-shot', { fromPos: attackerPos, toPos: targetEnemyPos, count: 2, isHit: hit1 || hit2, weaponClass: activeWep.class });
+
+      const newEW = [...enemyWounds];
+      let dtAllDefeated = false;
+      const hits = [];
+      if (hit1) hits.push(roll1);
+      if (hit2) hits.push(roll2);
+
+      if (hits.length > 0) {
+        // Reaction check (one dodge for the whole double-tap)
+        let dtDodged = false;
+        if (enemyReactionsUsedRef.current[targetIdx]) {
+          dtLog.push({ type: "enemy", text: `${target.name} has no reactions left — cannot dodge!` });
+        } else {
+          const dodgeRoll = d100();
+          const dodgeTgt = target.stats.agility || 20;
+          dtDodged = dodgeRoll <= dodgeTgt;
+          setEnemyReactionsUsed(prev => { const n = [...prev]; n[targetIdx] = true; return n; });
+          enemyReactionsUsedRef.current[targetIdx] = true;
+          dtLog.push({ type: "enemy", text: dtDodged ? `${target.name} DODGES! (AGI ${dodgeTgt}: rolled ${dodgeRoll})` : `${target.name} fails to dodge (${dodgeRoll}/${dodgeTgt})` });
+        }
+
+        if (!dtDodged) {
+          for (let h = 0; h < hits.length; h++) {
+            if (newEW[targetIdx] <= 0) break;
+            const loc = hitLocation(hits[h]);
+            const rawDmg = rollDamageDice(activeWep.damage, char.stats.psyRating || 0);
+            eventBridge.emit('combat-hit', { targetType: 'enemy', targetIndex: targetIdx });
+            const effectiveArmor = Math.max(0, (target.armor || 0) - (activeWep.pen || 0));
+            const tb = Math.floor((target.stats?.toughness || 0) / 10);
+            const finalDmg = Math.max(1, rawDmg - effectiveArmor - tb);
+            dtLog.push({ type: "player", text: `  Hit ${h + 1}: ${loc}! ${rawDmg} dmg − Armor ${effectiveArmor}${tb ? ` − TB${tb}` : ''} = ${finalDmg}` });
+            eventBridge.emit('combat-float-text', { targetType: 'enemy', targetIndex: targetIdx, text: `-${finalDmg}`, color: '#ff4444' });
+            newEW[targetIdx] = Math.max(0, newEW[targetIdx] - finalDmg);
+            setEnemyBodyWounds(prev => { const upd = prev.map(bw => ({ ...bw })); if (upd[targetIdx]) upd[targetIdx] = { ...upd[targetIdx], [loc]: (upd[targetIdx][loc] || 0) + finalDmg }; return upd; });
+            if (newEW[targetIdx] <= 0) {
+              eventBridge.emit('combat-death', { targetType: 'enemy', targetIndex: targetIdx });
+              dtLog.push({ type: "player", text: `The ${target.name} is DEFEATED!` });
+              if (newEW.every(w => w <= 0)) dtAllDefeated = true;
+              break;
+            }
+          }
+          if (newEW[targetIdx] > 0) dtLog.push({ type: "player", text: `${target.name}: ${newEW[targetIdx]}/${target.wounds} wounds remaining.` });
+        }
+      } else {
+        // Both missed
+        setTimeout(() => eventBridge.emit('combat-float-text', { targetType: 'enemy', targetIndex: targetIdx, text: 'MISS', color: '#aaaaaa' }), 100);
+      }
+
+      setEnemyWounds(newEW);
+      setCombatLog(prevLog => [...prevLog, ...dtLog]);
+      setAiming(false);
+      setFireMode('single');
+      // Double-tap costs both half actions (full action equivalent)
+      setTurnState(prev => ({ ...prev, half_actions_spent: 2 }));
+      if (!dtAllDefeated) {
+        setTimeout(() => advanceInitiative(currentTurn, initiativeOrder, gridPositions.party, gridPositions.enemies, newEW), 1000);
+      }
+      return;
+    }
+
+    // To-hit modifier: range band + aim bonus + full-auto penalty + move penalty + elevation
+    let hitMod = rangeMod + movePenalty;
+    if (aiming && mode === 'single') hitMod += getAimedShotBonus(per) * 10; // Aimed shot bonus from PER
     if (mode === 'full') hitMod -= 10;
     const shooterElevated = isOnPlatform(attackerPos, terrain);
     const targetElevated  = isOnPlatform(targetEnemyPos, terrain);
@@ -1768,7 +1992,6 @@ export default function MissionSystem({ onNavigate, initialEncounter, initialPar
     const targetNum = Math.min(100, Math.max(5, per + hitMod));
     const roll = d100();
     const hit = roll <= targetNum;
-    // Degrees of Success: every full 10 below the target = 1 DoS → 1 extra hit
     const dos = hit ? Math.floor((targetNum - roll) / 10) : 0;
 
     const modeLabel = mode === 'semi' ? 'Semi-Auto Burst' : mode === 'full' ? 'Full Auto' : (aiming ? 'Aimed Shot' : 'Single Shot');
@@ -1777,7 +2000,8 @@ export default function MissionSystem({ onNavigate, initialEncounter, initialPar
     const modParts = [];
     const fmt = n => n > 0 ? `+${n}` : `${n}`;
     if (rangeMod !== 0) modParts.push(`${fmt(rangeMod)} ${rangeBand}`);
-    if (aiming && mode === 'single') modParts.push('+20 Aim');
+    if (movePenalty !== 0) modParts.push(`${fmt(movePenalty)} move${hasProf ? '' : ' (no prof)'}`);
+    if (aiming && mode === 'single') modParts.push(`+${getAimedShotBonus(per) * 10} Aim`);
     if (mode === 'full') modParts.push('−10 FA');
     if (shooterElevated && !targetElevated) modParts.push('+20 Elevation');
     const modBreakdown = modParts.length ? ` [${modParts.join(', ')}]` : '';
@@ -1792,7 +2016,7 @@ export default function MissionSystem({ onNavigate, initialEncounter, initialPar
       eventBridge.emit('combat-shot', { fromPos: attackerPos, toPos: targetEnemyPos, count: 2, isHit: false, weaponClass: activeWep.class });
       setAiming(false);
       setFireMode('single');
-      setTimeout(() => advanceInitiative(currentTurn, initiativeOrder, gridPositions.party, gridPositions.enemies, enemyWounds), 1000);
+      setTimeout(() => advanceInitiative(currentTurn, initiativeOrder, gridPositions.party, gridPositions.enemies, enemyWoundsRef.current), 1000);
       return;
     }
 
@@ -1818,6 +2042,7 @@ export default function MissionSystem({ onNavigate, initialEncounter, initialPar
 
     if (mode === 'single') {
       log.push({ type: "player", text: `${char.name} [${modeLabel}] at ${target.name} — ${rangeBand} (${distTiles * 3}m)${modBreakdown} · PER ${per} = ${targetNum} (net ${netStr}): rolled ${roll}... ${hit ? 'HIT!' : 'MISS!'}` });
+      if (!hit) eventBridge.emit('combat-float-text', { targetType: 'enemy', targetIndex: targetIdx, text: 'MISS', color: '#aaaaaa' });
     } else {
       log.push({ type: "player", text: `${char.name} [${modeLabel} ×${rounds}] at ${target.name} — ${rangeBand} (${distTiles * 3}m)${modBreakdown} · PER ${per} = ${targetNum} (−5 recoil/round)` });
     }
@@ -1836,6 +2061,8 @@ export default function MissionSystem({ onNavigate, initialEncounter, initialPar
 
       if (mode !== 'single') {
         log.push({ type: "player", text: `  Rnd ${r + 1}: target ${roundTarget}${recoilPenalty ? ` (−${recoilPenalty} recoil)` : ''} → rolled ${roundRoll}... ${roundHit ? 'HIT' : 'miss'}` });
+        // Staggered per-round float text
+        setTimeout(() => eventBridge.emit('combat-float-text', { targetType: 'enemy', targetIndex: targetIdx, text: roundHit ? 'HIT' : 'MISS', color: roundHit ? '#6ee7b7' : '#aaaaaa' }), r * 120);
       }
 
       if (roundHit) {
@@ -1866,6 +2093,7 @@ export default function MissionSystem({ onNavigate, initialEncounter, initialPar
               enemyReactionsUsedRef.current = nr;
               setEnemyReactionsUsed(nr);
               if (scatDodged) {
+                eventBridge.emit('combat-float-text', { targetType: 'enemy', targetIndex: eIdx, text: 'DODGE', color: '#60aadd' });
                 log.push({ type: "enemy", text: `  ↳ ${scatEnemy.name} dodges scatter! (${scatDodgeLbl} ${scatDodgeTgt}: rolled ${scatDodgeRoll})` });
               } else {
                 log.push({ type: "enemy", text: `  ↳ ${scatEnemy.name} fails to dodge scatter (${scatDodgeRoll}/${scatDodgeTgt})` });
@@ -1876,6 +2104,7 @@ export default function MissionSystem({ onNavigate, initialEncounter, initialPar
               const scatArmor = Math.max(0, (scatEnemy.armor || 0) - (activeWep.pen || 0));
               const scatTb    = Math.floor((scatEnemy.stats?.toughness || 0) / 10);
               const scatNet   = Math.max(1, scatDmg - scatArmor - scatTb);
+              eventBridge.emit('combat-float-text', { targetType: 'enemy', targetIndex: eIdx, text: `-${scatNet}`, color: '#ff8844' });
               log.push({ type: "player", text: `  ↳ Rnd ${r + 1} scatter → ${scatEnemy.name}: ${scatDmg} − Armor ${scatArmor}${scatTb ? ` − TB${scatTb}` : ''} = ${scatNet} dmg` });
               newEnemyWounds[eIdx] = Math.max(0, newEnemyWounds[eIdx] - scatNet);
               if (newEnemyWounds[eIdx] <= 0) {
@@ -1905,6 +2134,7 @@ export default function MissionSystem({ onNavigate, initialEncounter, initialPar
         const { target: dodgeTarget2, label: dodgeLbl2 } = getEnemyDodgeTarget(target);
         dodged = dodgeRoll <= dodgeTarget2;
         if (dodged) {
+          eventBridge.emit('combat-float-text', { targetType: 'enemy', targetIndex: targetIdx, text: 'DODGE', color: '#60aadd' });
           log.push({ type: "enemy", text: `${target.name} DODGES the burst! (${dodgeLbl2} ${dodgeTarget2}: rolled ${dodgeRoll})` });
         } else {
           log.push({ type: "enemy", text: `${target.name} fails to dodge (rolled ${dodgeRoll}/${dodgeTarget2})` });
@@ -1930,6 +2160,7 @@ export default function MissionSystem({ onNavigate, initialEncounter, initialPar
           const effectiveArmor = Math.max(0, (target.armor || 0) - (activeWep.pen || 0));
           const tb       = Math.floor((target.stats?.toughness || 0) / 10);
           const finalDmg = Math.max(1, rawDmg - effectiveArmor - tb);
+          eventBridge.emit('combat-float-text', { targetType: 'enemy', targetIndex: targetIdx, text: `-${finalDmg}`, color: '#ff4444' });
           log.push({ type: "player", text: `${hitLabel}${loc}! ${rawDmg} dmg − Armor ${effectiveArmor}${tb ? ` − TB${tb}` : ''} = ${finalDmg}` });
           newEnemyWounds[targetIdx] = Math.max(0, newEnemyWounds[targetIdx] - finalDmg);
           setEnemyBodyWounds(prev => {
@@ -1954,6 +2185,11 @@ export default function MissionSystem({ onNavigate, initialEncounter, initialPar
     setCombatLog(prevLog => [...prevLog, ...log]);
     setAiming(false);
     setFireMode('single');
+    // Spend action from turn state (single/burst = half, full auto/aimed = already spent as full in UI)
+    if (mode === 'single' || mode === 'semi') {
+      setTurnState(prev => spendAction(prev, mode === 'semi' ? 'BURST_FIRE' : 'SINGLE_SHOT'));
+    }
+    // Full auto / aimed already spent via UI button click
     if (!allDefeated) {
       setTimeout(() => advanceInitiative(currentTurn, initiativeOrder, gridPositions.party, gridPositions.enemies, newEnemyWounds), 1000);
     }
@@ -2035,6 +2271,7 @@ export default function MissionSystem({ onNavigate, initialEncounter, initialPar
     setCombatLog(prevLog => [...prevLog, ...log]);
     setAiming(false);
     setFireMode('single');
+    setTurnState(prev => spendAction(prev, 'SUPPRESSIVE_FIRE'));
     const allDefeated = newEnemyWounds.every(w => w <= 0);
     if (!allDefeated) {
       setTimeout(() => advanceInitiative(currentTurn, initiativeOrder, gridPositions.party, gridPositions.enemies, newEnemyWounds), 1000);
@@ -2056,7 +2293,7 @@ export default function MissionSystem({ onNavigate, initialEncounter, initialPar
         ? (partyWoundsRef.current[entry.index] || 0) >= (party[entry.index]?.wounds || 10)
         : (eWounds[entry.index] || 0) <= 0;
 
-      console.log("Dead check: entry", nextTurn, "=", entry.name, "type:", entry.type, "index:", entry.index, "isDead:", isDead, "wounds:", entry.type === 'party' ? partyWoundsRef.current[entry.index] : enemyWounds[entry.index]);
+      console.log("Dead check: entry", nextTurn, "=", entry.name, "type:", entry.type, "index:", entry.index, "isDead:", isDead, "wounds:", entry.type === 'party' ? partyWoundsRef.current[entry.index] : eWounds[entry.index]);
 
       if (!isDead) break;
       nextTurn++;
@@ -2065,6 +2302,7 @@ export default function MissionSystem({ onNavigate, initialEncounter, initialPar
     // If we've gone through all combatants, loop back (new round)
     if (nextTurn >= init.length) {
       nextTurn = 0;
+      setRoundCounter(prev => prev + 1);
       // Skip dead at start of new round too
       while (nextTurn < init.length) {
         const entry = init[nextTurn];
@@ -2088,11 +2326,49 @@ export default function MissionSystem({ onNavigate, initialEncounter, initialPar
     }
 
     setCurrentTurn(nextTurn);
-    setCombatAction('movement'); // Reset to movement phase for next actor
+    setCombatAction('movement'); // Legacy: reset to movement phase
     setAiming(false);            // Clear any aim bonus from previous turn
     setShootingMode(false);      // Cancel any pending targeting
-    setRemainingAction('full');  // Each new turn starts with a full action available
+    setRemainingAction('full');  // Legacy: Each new turn starts with a full action available
     setFireMode('single');       // Reset fire mode to single
+    // New action economy: reset turn state, preserve persistent flags
+    setTurnState(prev => {
+      const reset = resetTurnFlags(prev);
+      // Grenade detonation-in-hand check (spec 3.1)
+      if (shouldDetonateInHand(reset, roundCounter)) {
+        // Will be handled in UI — flag stays, detonation resolves at turn start
+        setCombatLog(prevLog => [...prevLog, { type: 'system', text: `GRENADE DETONATES IN HAND! Held too long!` }]);
+        // Auto-detonate at holder's position
+        const incomingActor = init[nextTurn];
+        if (incomingActor?.type === 'party') {
+          const pos = partyPos[incomingActor.index];
+          const blastTiles = getBlastTiles(pos, GRENADE_TYPES.FRAG.blastRadius, 20);
+          const { partyHit, enemyHit } = getCharactersInBlast(blastTiles, partyPos, enemyPos);
+          const dmgLog = [];
+          for (const pi of partyHit) {
+            const rawDmg = rollDamageDice(GRENADE_TYPES.FRAG.damage);
+            const tb = Math.floor((party[pi]?.stats?.toughness || 0) / 10);
+            const finalDmg = Math.max(1, rawDmg - (party[pi]?.armor || 0) - tb);
+            dmgLog.push({ type: 'system', text: `${party[pi]?.name} takes ${finalDmg} from in-hand detonation!` });
+            setPartyWounds(pw => { const nw = [...pw]; nw[pi] = (nw[pi] || 0) + finalDmg; return nw; });
+          }
+          const newEW = [...eWounds];
+          for (const ei of enemyHit) {
+            if (newEW[ei] <= 0) continue;
+            const rawDmg = rollDamageDice(GRENADE_TYPES.FRAG.damage);
+            const tb = Math.floor((encounter?.enemies?.[ei]?.stats?.toughness || 0) / 10);
+            const finalDmg = Math.max(1, rawDmg - (encounter?.enemies?.[ei]?.armor || 0) - tb);
+            dmgLog.push({ type: 'system', text: `${encounter?.enemies?.[ei]?.name || 'Enemy'} takes ${finalDmg} from grenade detonation!` });
+            newEW[ei] = Math.max(0, newEW[ei] - finalDmg);
+          }
+          setCombatLog(prevLog => [...prevLog, ...dmgLog]);
+          setEnemyWounds(newEW);
+        }
+        return { ...reset, grenade_primed: false, grenade_prime_turn: -1 };
+      }
+      return reset;
+    });
+    setGrenadeMode(false);
     
     // Check if all enemies are dead
     const allEnemyDead = eWounds.every(w => w <= 0);
@@ -2173,6 +2449,7 @@ export default function MissionSystem({ onNavigate, initialEncounter, initialPar
               const parryRoll = d100();
               const parryTarget = impEnemy.stats.meleeSkill || 20;
               if (parryRoll <= parryTarget) {
+                eventBridge.emit('combat-float-text', { targetType: 'enemy', targetIndex: impIdx, text: 'PARRY', color: '#c8a84a' });
                 log.push({ type: "enemy", text: `${impEnemy.name} PARRIES! (MEL ${parryTarget}: rolled ${parryRoll})` });
                 reactionBlocked = true;
               } else {
@@ -2188,6 +2465,7 @@ export default function MissionSystem({ onNavigate, initialEncounter, initialPar
           const effectiveArmor = Math.max(0, impEnemy.armor || 0); // pen 0 for improvised
           const tb       = Math.floor((impEnemy.stats?.toughness || 0) / 10);
           const finalDmg = Math.max(1, rawDmg - effectiveArmor - tb);
+          eventBridge.emit('combat-float-text', { targetType: 'enemy', targetIndex: impIdx, text: `-${finalDmg}`, color: '#ff4444' });
           log.push({ type: "player", text: `Hit ${loc}! ${rawDmg} dmg (1d5+SB${sb}) − Armor ${effectiveArmor}${tb ? ` − TB${tb}` : ''} = ${finalDmg}` });
 
           const newEnemyWounds = [...enemyWounds];
@@ -2207,7 +2485,7 @@ export default function MissionSystem({ onNavigate, initialEncounter, initialPar
         }
       }
       setCombatLog(prevLog => [...prevLog, ...log]);
-      setTimeout(() => advanceInitiative(currentTurn, initiativeOrder, gridPositions.party, gridPositions.enemies, enemyWounds), 1000);
+      setTimeout(() => advanceInitiative(currentTurn, initiativeOrder, gridPositions.party, gridPositions.enemies, enemyWoundsRef.current), 1000);
       return;
     }
 
@@ -2259,6 +2537,7 @@ export default function MissionSystem({ onNavigate, initialEncounter, initialPar
     const modLabel = modParts.length ? ` [${modParts.join(', ')}]` : '';
 
     let log = [{ type: "player", text: `${char.name} attacks ${enemy.name} with ${weapon.name} (MEL ${char.stats.meleeSkill || 20}${modLabel} = ${targetNum}): rolled ${roll}... ${hit ? `HIT! (${dos} DoS)` : 'MISS!'}` }];
+    if (!hit) eventBridge.emit('combat-float-text', { targetType: 'enemy', targetIndex: enemyIdx, text: 'MISS', color: '#aaaaaa' });
 
     if (hit) {
       // 3. Hit Location (reverse the roll digits)
@@ -2281,6 +2560,7 @@ export default function MissionSystem({ onNavigate, initialEncounter, initialPar
         setEnemyReactionsUsed(prev => { const n = [...prev]; n[enemyIdx] = true; return n; });
         enemyReactionsUsedRef.current[enemyIdx] = true;
         if (dodgeRoll <= dodgeTarget) {
+          eventBridge.emit('combat-float-text', { targetType: 'enemy', targetIndex: enemyIdx, text: 'DODGE', color: '#60aadd' });
           log.push({ type: "enemy", text: `${enemy.name} DODGES! (${dodgeLbl} ${dodgeTarget}: rolled ${dodgeRoll})` });
           reactionBlocked = true;
         } else {
@@ -2289,6 +2569,7 @@ export default function MissionSystem({ onNavigate, initialEncounter, initialPar
             const parryRoll   = d100();
             const parryTarget = enemy.stats.meleeSkill || 20;
             if (parryRoll <= parryTarget) {
+              eventBridge.emit('combat-float-text', { targetType: 'enemy', targetIndex: enemyIdx, text: 'PARRY', color: '#c8a84a' });
               log.push({ type: "enemy", text: `${enemy.name} PARRIES! (MEL ${parryTarget}: rolled ${parryRoll})` });
               reactionBlocked = true;
             } else {
@@ -2307,6 +2588,7 @@ export default function MissionSystem({ onNavigate, initialEncounter, initialPar
         const effectiveArmor = Math.max(0, (enemy.armor || 0) - (weapon.pen || 0));
         const tb             = Math.floor((enemy.stats?.toughness || 0) / 10);
         const finalDmg       = Math.max(1, rawDmg - effectiveArmor - tb);
+        eventBridge.emit('combat-float-text', { targetType: 'enemy', targetIndex: enemyIdx, text: `-${finalDmg}`, color: '#ff4444' });
 
         log.push({ type: "player", text: `Hit ${loc}! ${rawDmg} dmg (${weapon.damage}+SB${sb}) − Armor ${effectiveArmor}${tb ? ` − TB${tb}` : ''} = ${finalDmg}` });
 
@@ -2332,7 +2614,9 @@ export default function MissionSystem({ onNavigate, initialEncounter, initialPar
     }
 
     setCombatLog(prevLog => [...prevLog, ...log]);
-    setTimeout(() => advanceInitiative(currentTurn, initiativeOrder, gridPositions.party, gridPositions.enemies, enemyWounds), 1000);
+    // Melee strike costs a half action
+    setTurnState(prev => spendAction(prev, 'MELEE_STRIKE'));
+    setTimeout(() => advanceInitiative(currentTurn, initiativeOrder, gridPositions.party, gridPositions.enemies, enemyWoundsRef.current), 1000);
   }
 
   // Shared ranged-attack resolver used by both ranged-style and melee-fallback AI paths.
@@ -2380,6 +2664,7 @@ export default function MissionSystem({ onNavigate, initialEncounter, initialPar
 
     const dos = hit ? Math.floor((targetNum - roll) / 10) : 0;
     log.push({ type: "enemy", text: `${enemy.name} [${modeLabel}${rounds > 1 ? ` ×${rounds}` : ''}] fires ${weapon.name} at ${target.name} — ${rangeBand} (${manhattan * 3}m) · RNG ${rns}${modLabel} = ${targetNum}: rolled ${roll}... ${hit ? `HIT! (${dos} DoS)` : 'MISS!'}` });
+    if (!hit && mode === 'single') eventBridge.emit('combat-float-text', { targetType: 'party', targetIndex: nearestIdx, text: 'MISS', color: '#aaaaaa' });
 
     const newPartyWounds = [...partyWoundsRef.current];
     for (let r = 0; r < rounds; r++) {
@@ -2389,6 +2674,7 @@ export default function MissionSystem({ onNavigate, initialEncounter, initialPar
       const roundHit      = roundRoll <= roundTarget;
       if (mode !== 'single') {
         log.push({ type: "enemy", text: `  Rnd ${r + 1}: target ${roundTarget}${recoilPenalty ? ` (−${recoilPenalty} recoil)` : ''} → rolled ${roundRoll}... ${roundHit ? 'HIT' : 'miss'}` });
+        setTimeout(() => eventBridge.emit('combat-float-text', { targetType: 'party', targetIndex: nearestIdx, text: roundHit ? 'HIT' : 'MISS', color: roundHit ? '#f87171' : '#aaaaaa' }), r * 120);
       }
       if (roundHit) {
         const loc    = hitLocation(roundRoll);
@@ -2409,6 +2695,7 @@ export default function MissionSystem({ onNavigate, initialEncounter, initialPar
           partyReactionsUsedRef.current = nr;
           setPartyReactionsUsed(nr);
           if (dodgeRoll <= dodgeTarget) {
+            eventBridge.emit('combat-float-text', { targetType: 'party', targetIndex: nearestIdx, text: 'DODGE', color: '#60aadd' });
             log.push({ type: "player", text: `${target.name} DODGES! (${dodgeLbl} ${dodgeTarget}: rolled ${dodgeRoll})` });
             reactionBlocked = true;
           } else {
@@ -2421,6 +2708,7 @@ export default function MissionSystem({ onNavigate, initialEncounter, initialPar
           const effectiveArmor = Math.max(0, charArmor - (weapon.pen || 0));
           const tb             = Math.floor((target.stats?.toughness || 0) / 10);
           const finalDmg       = Math.max(1, rawDmg - effectiveArmor - tb);
+          eventBridge.emit('combat-float-text', { targetType: 'party', targetIndex: nearestIdx, text: `-${finalDmg}`, color: '#ff4444' });
           log.push({ type: "enemy", text: `Hit ${loc}! ${rawDmg} dmg (${weapon.damage}) − Armor ${effectiveArmor}${tb ? ` − TB${tb}` : ''} = ${finalDmg} to ${target.name}` });
           newPartyWounds[nearestIdx] = (newPartyWounds[nearestIdx] || 0) + finalDmg;
           setPartyWounds([...newPartyWounds]);
@@ -2449,6 +2737,92 @@ export default function MissionSystem({ onNavigate, initialEncounter, initialPar
     return true;
   }
 
+  // ── GRENADE THROW (grid-click targeting) ───────────────────────
+  function playerGrenadeThrow(targetX, targetY) {
+    const actor = initiativeOrder[currentTurn];
+    if (!actor || actor.type !== 'party') return;
+    const actIdx = actor.index;
+    const char = party[actIdx];
+    if (!char) return;
+    if (!turnState.grenade_primed) return;
+
+    setGrenadeMode(false);
+    const attackerPos = gridPositions.party[actIdx];
+    const grenade = GRENADE_TYPES.FRAG; // Default to frag for now
+
+    const result = resolveGrenadeThrow(
+      { ...char, x: attackerPos.x, y: attackerPos.y },
+      { x: targetX, y: targetY },
+      grenade,
+      20
+    );
+
+    const log = [...result.log];
+    const blastTiles = getBlastTiles(result.landingTile, grenade.blastRadius, 20);
+    const { partyHit, enemyHit } = getCharactersInBlast(blastTiles, gridPositions.party, gridPositions.enemies);
+
+    // Emit blast visual
+    eventBridge.emit('combat-shot', { fromPos: attackerPos, toPos: result.landingTile, count: 1, isHit: true, weaponClass: 'Grenade' });
+
+    if (result.outcome === 'fumble') {
+      log.push({ type: 'system', text: `WARNING: Fumble! Check friendly fire!` });
+    }
+
+    const newEW = [...enemyWounds];
+    let allDefeated = false;
+
+    // Apply blast damage to enemies in radius
+    for (const ei of enemyHit) {
+      if (newEW[ei] <= 0) continue;
+      const rawDmg = rollDamageDice(grenade.damage);
+      const target = encounter.enemies[ei];
+      const effectiveArmor = Math.max(0, (target.armor || 0) - (grenade.pen || 0));
+      const tb = Math.floor((target.stats?.toughness || 0) / 10);
+      const finalDmg = Math.max(1, rawDmg - effectiveArmor - tb);
+      log.push({ type: 'player', text: `${grenade.name} hits ${target.name}! ${rawDmg} dmg − Armor ${effectiveArmor}${tb ? ` − TB${tb}` : ''} = ${finalDmg}` });
+      eventBridge.emit('combat-float-text', { targetType: 'enemy', targetIndex: ei, text: `-${finalDmg}`, color: '#ff8844' });
+      eventBridge.emit('combat-hit', { targetType: 'enemy', targetIndex: ei });
+      newEW[ei] = Math.max(0, newEW[ei] - finalDmg);
+      if (newEW[ei] <= 0) {
+        eventBridge.emit('combat-death', { targetType: 'enemy', targetIndex: ei });
+        log.push({ type: 'player', text: `The ${target.name} is DEFEATED!` });
+      }
+    }
+
+    // Apply blast damage to party members in radius (friendly fire)
+    for (const pi of partyHit) {
+      const target = party[pi];
+      if (!target) continue;
+      const rawDmg = rollDamageDice(grenade.damage);
+      const effectiveArmor = Math.max(0, (target.armor || 0) - (grenade.pen || 0));
+      const tb = Math.floor((target.stats?.toughness || 0) / 10);
+      const finalDmg = Math.max(1, rawDmg - effectiveArmor - tb);
+      log.push({ type: 'system', text: `FRIENDLY FIRE! ${grenade.name} hits ${target.name}! ${finalDmg} damage!` });
+      eventBridge.emit('combat-float-text', { targetType: 'party', targetIndex: pi, text: `-${finalDmg}`, color: '#ff4444' });
+      // Apply wounds to party member
+      setPartyWounds(prev => {
+        const nw = [...prev];
+        nw[pi] = (nw[pi] || 0) + finalDmg;
+        return nw;
+      });
+    }
+
+    if (newEW.every(w => w <= 0)) allDefeated = true;
+    setEnemyWounds(newEW);
+    setCombatLog(prev => [...prev, ...log]);
+
+    // Clear grenade state, spend action
+    setTurnState(prev => ({
+      ...spendAction(prev, 'THROW_GRENADE'),
+      grenade_primed: false,
+      grenade_prime_turn: -1,
+    }));
+
+    if (!allDefeated) {
+      setTimeout(() => advanceInitiative(currentTurn, initiativeOrder, gridPositions.party, gridPositions.enemies, newEW), 1200);
+    }
+  }
+
   function enemyTurn(turnIndex, initiativeArray, partyPositions, enemyPositions) {
     console.log(">>> enemyTurn START, turnIndex =", turnIndex);
     // Use provided data or fall back to state
@@ -2463,11 +2837,11 @@ export default function MissionSystem({ onNavigate, initialEncounter, initialPar
       return;
     }
     
-    // Check if enemy is already dead
-    const enemyWoundsCurrent = enemyWounds[actor.index] || 0;
+    // Check if enemy is already dead (use ref for always-current wounds)
+    const enemyWoundsCurrent = enemyWoundsRef.current[actor.index] || 0;
     if (enemyWoundsCurrent <= 0) {
       console.log("enemyTurn: enemy is dead, skipping turn");
-      setTimeout(() => advanceInitiative(actorIndex, init, partyPos, enemyPosList, enemyWounds), 100);
+      setTimeout(() => advanceInitiative(actorIndex, init, partyPos, enemyPosList, enemyWoundsRef.current), 100);
       return;
     }
     
@@ -2498,14 +2872,14 @@ export default function MissionSystem({ onNavigate, initialEncounter, initialPar
     if (nearestIdx === -1) {
       // No living targets
       setCombatLog(prevLog => [...prevLog, { type: "enemy", text: `${enemy.name} has no targets!` }]);
-      setTimeout(() => advanceInitiative(actorIndex, init, partyPos, enemyPosList, enemyWounds), 500);
+      setTimeout(() => advanceInitiative(actorIndex, init, partyPos, enemyPosList, enemyWoundsRef.current), 500);
       return;
     }
     
     const target = party[nearestIdx];
     const targetPos = partyPos[nearestIdx];
     const agi = enemy.stats.agility || 20;
-    const moveRange = Math.floor(agi / 10) + 4;
+    const moveRange = getBaseMovement(agi);
     
     let log = [];
     let newEnemyPositions = [...enemyPosList];
@@ -2621,6 +2995,7 @@ export default function MissionSystem({ onNavigate, initialEncounter, initialPar
       const dos  = hit ? Math.floor((effectiveEms - roll) / 10) : 0;
 
       log.push({ type: "enemy", text: `${enemy.name}${isPinned ? ' [PINNED −20]' : ''} attacks ${target.name} with ${eWeapon.name} (MEL ${effectiveEms}): rolled ${roll}... ${hit ? `HIT! (${dos} DoS)` : 'MISS!'}` });
+      if (!hit) eventBridge.emit('combat-float-text', { targetType: 'party', targetIndex: nearestIdx, text: 'MISS', color: '#aaaaaa' });
 
       if (hit) {
         const loc    = hitLocation(roll);
@@ -2638,6 +3013,7 @@ export default function MissionSystem({ onNavigate, initialEncounter, initialPar
           partyReactionsUsedRef.current = nr;
           setPartyReactionsUsed(nr);
           if (dodgeRoll <= dodgeTarget) {
+            eventBridge.emit('combat-float-text', { targetType: 'party', targetIndex: nearestIdx, text: 'DODGE', color: '#60aadd' });
             log.push({ type: "player", text: `${target.name} DODGES! (${dodgeLbl} ${dodgeTarget}: rolled ${dodgeRoll})` });
             reactionBlocked = true;
           } else {
@@ -2647,6 +3023,7 @@ export default function MissionSystem({ onNavigate, initialEncounter, initialPar
               const parryRoll   = d100();
               const parryTarget = Math.min(100, (target.stats.meleeSkill || 20) + parryBonus);
               if (parryRoll <= parryTarget) {
+                eventBridge.emit('combat-float-text', { targetType: 'party', targetIndex: nearestIdx, text: 'PARRY', color: '#c8a84a' });
                 log.push({ type: "player", text: `${target.name} PARRIES! (MEL ${parryTarget}${parryBonus ? ` [Shield+${parryBonus}]` : ''}: rolled ${parryRoll})` });
                 reactionBlocked = true;
               } else {
@@ -2664,6 +3041,7 @@ export default function MissionSystem({ onNavigate, initialEncounter, initialPar
           const effectiveArmor = Math.max(0, charArmor - (eWeapon.pen || 0));
           const tb             = Math.floor((target.stats?.toughness || 0) / 10);
           const finalDmg       = Math.max(1, rawDmg - effectiveArmor - tb);
+          eventBridge.emit('combat-float-text', { targetType: 'party', targetIndex: nearestIdx, text: `-${finalDmg}`, color: '#ff4444' });
           log.push({ type: "enemy", text: `Hit ${loc}! ${rawDmg} dmg (${eWeapon.damage}+SB${sb}) − Armor ${effectiveArmor}${tb ? ` − TB${tb}` : ''} = ${finalDmg} to ${target.name}` });
 
           const newPartyWounds = [...partyWoundsRef.current];
@@ -2703,7 +3081,7 @@ export default function MissionSystem({ onNavigate, initialEncounter, initialPar
     
     console.log(">>> enemyTurn END, calling advanceInitiative with", actorIndex);
     // Advance initiative with updated positions
-    setTimeout(() => advanceInitiative(actorIndex, init, partyPos, newEnemyPositions, enemyWounds), 1000);
+    setTimeout(() => advanceInitiative(actorIndex, init, partyPos, newEnemyPositions, enemyWoundsRef.current), 1000);
   }
 
   function completeMission(victory) {
@@ -2939,7 +3317,7 @@ export default function MissionSystem({ onNavigate, initialEncounter, initialPar
     setCombatLog(prevLog => [...prevLog, { type: "system", text: `FATE POINT SPENT! ${char.name} survives at 1 HP!` }]);
     
     // Advance initiative
-    setTimeout(() => advanceInitiative(currentTurn, initiativeOrder, gridPositions.party, gridPositions.enemies, enemyWounds), 500);
+    setTimeout(() => advanceInitiative(currentTurn, initiativeOrder, gridPositions.party, gridPositions.enemies, enemyWoundsRef.current), 500);
   }
 
   function confirmPartyMemberDeath(charIndex) {
@@ -2953,7 +3331,7 @@ export default function MissionSystem({ onNavigate, initialEncounter, initialPar
     setPendingFateIndex(null);
     
     // Advance initiative
-    setTimeout(() => advanceInitiative(currentTurn, initiativeOrder, gridPositions.party, gridPositions.enemies, enemyWounds), 500);
+    setTimeout(() => advanceInitiative(currentTurn, initiativeOrder, gridPositions.party, gridPositions.enemies, enemyWoundsRef.current), 500);
   }
 
   function handleNextPartyMember() {

@@ -136,25 +136,39 @@ export default function ExplorationSystem({ state, dispatch }) {
         }
       }
 
-      // Check for encounters
-      const roster = JSON.parse(localStorage.getItem("dhgen_roster") || "[]");
-      const perStat = roster[0]?.stats?.perception || roster[0]?.stats?.Per || 30;
+      // Check for encounters — use deployed squad
+      const squad = state.deployedSquad?.length > 0
+        ? state.deployedSquad
+        : JSON.parse(localStorage.getItem("dhgen_roster") || "[]");
+      const perStat = squad[0]?.stats?.perception || squad[0]?.stats?.Per || 30;
       const encounters = checkEncounters(updatedNPCs, { x, y }, regionId, perStat, tick);
       let combatTriggered = false;
       for (const enc of encounters) {
         if (enc.type === "agent_detected" || enc.type === "squad_detected") {
           addLog(`⚠ CONTACT: ${enc.entity.name || enc.entity.id} detected ${enc.distance} tiles away!`);
-        } else if (enc.type === "ambush" || enc.type === "agent_encounter") {
-          const label = enc.type === "ambush" ? "AMBUSH" : "ENCOUNTER";
+        } else if (enc.type === "ambush" || enc.type === "agent_encounter" || enc.type === "leader_ambush") {
+          const label = enc.type === "leader_ambush" ? "AMBUSH — SURROUNDED"
+            : enc.type === "ambush" ? "AMBUSH"
+            : "ENCOUNTER";
           addLog(`⚠ ${label}! ${enc.entity.name} attacks!`);
           const combatNarr = combatStartNarrative(enc.type, enc.entity.name);
           if (combatNarr) addLog(`[NARRATIVE] ${combatNarr}`);
-          dispatch({ type: "UPDATE_THREAT", delta: enc.type === "ambush" ? 5 : 3 });
+          dispatch({ type: "UPDATE_THREAT", delta: enc.type === "leader_ambush" ? 8 : enc.type === "ambush" ? 5 : 3 });
+
+          // Mark leader ambush as triggered
+          if (enc.type === "leader_ambush" && updatedNPCs.loyalistLeader) {
+            const leader = { ...updatedNPCs.loyalistLeader };
+            leader.ambushesSet = (leader.ambushesSet || []).map(a =>
+              a.id === enc.entity.id ? { ...a, triggered: true } : a
+            );
+            updatedNPCs.loyalistLeader = leader;
+            dispatch({ type: "SET_NPCS", npcs: updatedNPCs });
+          }
 
           if (!combatTriggered) {
             combatTriggered = true;
-            // Build combat party from roster
-            const combatParty = roster.filter(c => c && !c.kia).slice(0, 4);
+            // Build combat party from deployed squad (up to 8)
+            const combatParty = squad.filter(c => c && !c.kia).slice(0, 8);
             if (combatParty.length > 0) {
               // Generate encounter enemies based on squad strength or single agent
               const rank = getRank(combatParty[0]?.xp || 0);
@@ -163,13 +177,18 @@ export default function ExplorationSystem({ state, dispatch }) {
               const combatEncounter = generateEncounter(fakeMission, "LOWER_DISTRICTS", rank);
               // Trim to match squad size
               combatEncounter.enemies = combatEncounter.enemies.slice(0, enemyCount);
+
+              const sourceType = enc.type === "leader_ambush" ? "ambush"
+                : enc.type === "ambush" ? "squad"
+                : "agent";
               dispatch({
                 type: "START_COMBAT",
                 context: {
                   encounter: combatEncounter,
                   party: combatParty,
                   sourceEntityId: enc.entity.id,
-                  sourceEntityType: enc.type === "ambush" ? "squad" : "agent",
+                  sourceEntityType: sourceType,
+                  ambushLayout: enc.ambushLayout || null, // "surround" for leader ambushes
                 },
               });
             }
@@ -189,8 +208,10 @@ export default function ExplorationSystem({ state, dispatch }) {
     if (!selectedPOI) return;
 
     // Simple perception + intelligence check (d100 vs stat average)
-    const roster = JSON.parse(localStorage.getItem("dhgen_roster") || "[]");
-    const lead = roster[0]; // use first character's stats
+    const squad = state.deployedSquad?.length > 0
+      ? state.deployedSquad
+      : JSON.parse(localStorage.getItem("dhgen_roster") || "[]");
+    const lead = squad[0]; // use prefect/first character's stats
     const per = lead?.stats?.perception || lead?.stats?.Per || 30;
     const int = lead?.stats?.intelligence || lead?.stats?.Int || 30;
     const target = Math.floor((per + int) / 2);
@@ -334,6 +355,34 @@ export default function ExplorationSystem({ state, dispatch }) {
             </div>
           </div>
 
+          {/* Deployed Squad */}
+          {state.deployedSquad?.length > 0 && (
+            <div style={{ marginBottom: 12 }}>
+              <div style={{ fontFamily: "'Share Tech Mono', monospace", fontSize: 9,
+                letterSpacing: 3, color: "#c8a84a", borderBottom: "1px solid #1e3d5c",
+                paddingBottom: 4, marginBottom: 6, textTransform: "uppercase" }}>
+                Squad ({state.deployedSquad.length})
+              </div>
+              {state.deployedSquad.filter(c => !c.kia).map((char, i) => {
+                const isPrefect = char.isPrefect || (char.class || "").includes("Prefect");
+                return (
+                  <div key={char.id || i} style={{
+                    display: "flex", justifyContent: "space-between", padding: "2px 0",
+                    fontSize: 9, fontFamily: "'Share Tech Mono', monospace",
+                    borderBottom: "1px solid #0c1824",
+                  }}>
+                    <span style={{ color: isPrefect ? "#c8a84a" : "#4a8aaa" }}>
+                      {char.name}{isPrefect ? " ★" : ""}
+                    </span>
+                    <span style={{ color: "#2e5a82" }}>
+                      {char.role || char.class}
+                    </span>
+                  </div>
+                );
+              })}
+            </div>
+          )}
+
           {/* Threat meter */}
           <div style={{ marginBottom: 12 }}>
             <div style={{ fontFamily: "'Share Tech Mono', monospace", fontSize: 9,
@@ -362,6 +411,24 @@ export default function ExplorationSystem({ state, dispatch }) {
               </span>
             </div>
           </div>
+
+          {/* Enemy Intel — manpower and forces */}
+          {state.npcs.loyalistLeader?.alive && (
+            <div style={{ marginBottom: 12 }}>
+              <div style={{ fontFamily: "'Share Tech Mono', monospace", fontSize: 9,
+                letterSpacing: 3, color: "#c8a84a", borderBottom: "1px solid #1e3d5c",
+                paddingBottom: 4, marginBottom: 8, textTransform: "uppercase" }}>
+                Enemy Forces
+              </div>
+              <div style={{ display: "flex", flexDirection: "column", gap: 4, fontSize: 10,
+                fontFamily: "'Share Tech Mono', monospace", color: "#4a8aaa" }}>
+                <span>Manpower: {Math.max(0, (state.npcs.loyalistLeader.manpower || 100) - (state.npcs.loyalistLeader.manpowerUsed || 0))} / {state.npcs.loyalistLeader.manpower || 100}</span>
+                <span>Active Squads: {(state.npcs.squads || []).filter(s => s.alive).length}</span>
+                <span>Active Agents: {(state.npcs.agents || []).filter(a => a.alive).length}</span>
+                <span>Ambushes Set: {(state.npcs.loyalistLeader.ambushesSet || []).filter(a => !a.triggered).length}</span>
+              </div>
+            </div>
+          )}
 
           {/* Investigation prompt */}
           {selectedPOI && (

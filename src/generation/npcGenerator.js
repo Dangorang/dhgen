@@ -76,6 +76,11 @@ function generateLoyalistLeader(planet, rng) {
   }
 
   const base = planet.hiddenState.loyalistBase;
+  // Manpower pool: average 100, variance ±30 based on planet development
+  const baseManpower = 100;
+  const devBonus = planet.development === "high" ? 20 : planet.development === "low" ? -20 : 0;
+  const manpower = baseManpower + devBonus + randInt(-10, 10, rng);
+
   return {
     id: `leader_${Math.floor(rng() * 100000)}`,
     name: generateName(rng),
@@ -92,6 +97,9 @@ function generateLoyalistLeader(planet, rng) {
     hidden: true,
     alive: true,
     faction: "loyalist",
+    manpower,          // total manpower pool
+    manpowerUsed: 0,   // how much has been committed
+    ambushesSet: [],    // list of ambush positions
   };
 }
 

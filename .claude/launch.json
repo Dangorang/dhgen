@@ -4,7 +4,7 @@
     {
       "name": "dhgen-dev",
       "runtimeExecutable": "C:\\Program Files\\nodejs\\node.exe",
-      "runtimeArgs": ["C:\\Users\\dange\\dhgen\\node_modules\\vite\\bin\\vite.js", "--root", "C:\\Users\\dange\\dhgen", "--port", "5173"],
+      "runtimeArgs": ["C:\\Users\\dange\\dhgen\\node_modules\\vite\\bin\\vite.js", "C:\\Users\\dange\\dhgen\\.claude\\worktrees\\lucid-perlman", "--port", "5173"],
       "port": 5173
     }
   ]

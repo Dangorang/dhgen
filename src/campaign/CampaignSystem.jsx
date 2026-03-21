@@ -46,15 +46,21 @@ export default function CampaignSystem({ onNavigate }) {
     case "region":
       return <ExplorationSystem state={state} dispatch={dispatch} />;
 
-    case "combat":
+    case "combat": {
+      // Stamp ambush layout onto the encounter so MissionSystem can read it
+      const encounter = state.combatContext?.encounter;
+      if (encounter && state.combatContext?.ambushLayout) {
+        encounter._ambushLayout = state.combatContext.ambushLayout;
+      }
       return (
         <MissionSystem
-          initialEncounter={state.combatContext?.encounter}
+          initialEncounter={encounter}
           initialParty={state.combatContext?.party}
           onCombatEnd={handleCombatEnd}
           skipSelectionPhases
         />
       );
+    }
 
     case "sector_map":
     default:
