@@ -8,6 +8,7 @@ import { createCombatState, resetTurnFlags, applyMovement, getBaseMovement, getS
 import { ACTIONS, validateAction, spendAction, getAvailableActions, isTurnComplete, getAimedShotBonus } from "./combat/actionEconomy.js";
 import { hasProficiency, getBurstMovePenalty, getSingleShotMovePenalty, getDoubleTapAccuracy, requiresStationary, canFireHMGUnbraced } from "./combat/proficiency.js";
 import { GRENADE_TYPES, getGrenadeRange, resolveGrenadeThrow, getBlastTiles, getCharactersInBlast, shouldDetonateInHand } from "./combat/grenadeSystem.js";
+import { resolveChargePhase, resolveGrappleTurn, getAvailableGrappleActions, resolveBreakAttempt, resolveReachAction, calculateStaminaPool, getStaminaEffect } from "./combat/grappleSystem.js";
 
 const TIER_COLOR = {
   Routine:   "#4a8060",
@@ -403,6 +404,13 @@ export default function MissionSystem({ onNavigate, initialEncounter, initialPar
   const [enemyReactionsUsed,  setEnemyReactionsUsed]  = useState([]); // boolean[] — enemy used their 1 reaction this round
   const [grenadeMode, setGrenadeMode] = useState(false);   // true when targeting grenade throw on grid
   const [roundCounter, setRoundCounter] = useState(0);     // increments each time initiative loops
+  // ── Grapple state ──
+  // grappleState: { initiatorType, initiatorIdx, defenderType, defenderIdx, dominance,
+  //   initiatorStamina, defenderStamina, messyContact, round, grappleActionsUsed: 0 }
+  // Characters stay in normal initiative but get 2 grapple-only actions on their turn.
+  const [grappleState, setGrappleState] = useState(null);
+  const grappleStateRef = useRef(null);
+  useEffect(() => { grappleStateRef.current = grappleState; }, [grappleState]);
   const [terrain, setTerrain] = useState([]); // terrain pieces: platforms + cover barriers
   const terrainRef = useRef([]);
   useEffect(() => { terrainRef.current = terrain; }, [terrain]);
@@ -1228,8 +1236,72 @@ export default function MissionSystem({ onNavigate, initialEncounter, initialPar
                             Improvised Strike
                           </button>
                         )}
+                        {/* Initiate Grapple (half action, must be adjacent) */}
+                        {!grappleState && validateAction('INITIATE_GRAPPLE', turnState, actorChar, aw).valid && (
+                          <button
+                            onClick={() => playerInitiateGrapple()}
+                            style={{ borderColor: "#8a5a8a", color: "#cc88cc", padding: "6px 12px", fontSize: 10 }}>
+                            Grapple
+                          </button>
+                        )}
                       </>
                     )}
+
+                    {/* ── GRAPPLE IN-PROGRESS ACTIONS (on normal initiative, 2 grapple actions) ── */}
+                    {grappleState && (grappleState.grappleActionsUsed || 0) < 2 && (() => {
+                      const isInitiator = grappleState.initiatorType === 'party' && grappleState.initiatorIdx === actIdx;
+                      const myStamina = isInitiator ? grappleState.initiatorStamina : grappleState.defenderStamina;
+                      const grappleActions = getAvailableGrappleActions(grappleState.dominance, isInitiator, myStamina);
+                      const actionsLeft = 2 - (grappleState.grappleActionsUsed || 0);
+                      const opponentName = encounter.enemies[grappleState.defenderIdx]?.name || 'Enemy';
+
+                      return (
+                        <div style={{ display: 'flex', flexWrap: 'wrap', gap: 4, marginTop: 4, border: '1px solid #8a5a8a', padding: 8, borderRadius: 4 }}>
+                          <div style={{ color: '#cc88cc', fontSize: 11, width: '100%', fontFamily: "'Cinzel', serif" }}>
+                            GRAPPLE vs {opponentName}
+                          </div>
+                          <div style={{ color: '#aa88aa', fontSize: 10, width: '100%', marginBottom: 4 }}>
+                            Dominance: {grappleState.dominance} | Stamina: {myStamina} | Grapple Actions: {actionsLeft}/2
+                          </div>
+                          {/* Action slot indicators */}
+                          <div style={{ display: 'flex', gap: 2, width: '100%', marginBottom: 4 }}>
+                            {[0, 1].map(i => (
+                              <div key={i} style={{
+                                width: 12, height: 12, border: '1px solid #8a5a8a',
+                                background: i < (grappleState.grappleActionsUsed || 0) ? '#8a5a8a' : 'transparent',
+                                borderRadius: 2
+                              }} />
+                            ))}
+                          </div>
+                          {/* Wrestle for dominance */}
+                          <button
+                            onClick={() => resolvePlayerGrappleTurn()}
+                            style={{ borderColor: "#8a5a8a", color: "#cc88cc", padding: "6px 12px", fontSize: 10 }}>
+                            Wrestle
+                          </button>
+                          {/* Break free */}
+                          <button
+                            onClick={() => playerBreakGrapple()}
+                            style={{ borderColor: "#6a6a30", color: "#aaaa50", padding: "6px 12px", fontSize: 10 }}>
+                            Break Free
+                          </button>
+                          {/* Reach for sidearm */}
+                          <button
+                            onClick={() => playerReachSidearm()}
+                            style={{ borderColor: "#8a4a2a", color: "#dd7744", padding: "6px 12px", fontSize: 10 }}>
+                            Reach Sidearm
+                          </button>
+                          {/* Dominance actions */}
+                          {grappleActions.map(action => (
+                            <button key={action}
+                              onClick={() => playerGrappleAction(action)}
+                              style={{ borderColor: "#aa3a3a", color: "#ff6666", padding: "6px 12px", fontSize: 10 }}>
+                              {action}
+                            </button>
+                          ))}
+                        </div>
+                      );
+                    })()}
 
                     {/* ── SUPPORT ACTIONS ── */}
                     {halfActionsLeft > 0 && (
@@ -2292,9 +2364,6 @@ export default function MissionSystem({ onNavigate, initialEncounter, initialPar
       const isDead = entry.type === 'party'
         ? (partyWoundsRef.current[entry.index] || 0) >= (party[entry.index]?.wounds || 10)
         : (eWounds[entry.index] || 0) <= 0;
-
-      console.log("Dead check: entry", nextTurn, "=", entry.name, "type:", entry.type, "index:", entry.index, "isDead:", isDead, "wounds:", entry.type === 'party' ? partyWoundsRef.current[entry.index] : eWounds[entry.index]);
-
       if (!isDead) break;
       nextTurn++;
     }
@@ -2309,7 +2378,6 @@ export default function MissionSystem({ onNavigate, initialEncounter, initialPar
         const isDead = entry.type === 'party'
           ? (partyWoundsRef.current[entry.index] || 0) >= (party[entry.index]?.wounds || 10)
           : (eWounds[entry.index] || 0) <= 0;
-        
         if (!isDead) break;
         nextTurn++;
       }
@@ -2369,7 +2437,20 @@ export default function MissionSystem({ onNavigate, initialEncounter, initialPar
       return reset;
     });
     setGrenadeMode(false);
-    
+
+    // Reset grapple actions for incoming actor if they're in a grapple
+    const gs = grappleStateRef.current;
+    if (gs) {
+      const incoming = init[nextTurn];
+      const isInGrapple = incoming && (
+        (incoming.type === gs.initiatorType && incoming.index === gs.initiatorIdx) ||
+        (incoming.type === gs.defenderType && incoming.index === gs.defenderIdx)
+      );
+      if (isInGrapple) {
+        setGrappleState(prev => prev ? ({ ...prev, grappleActionsUsed: 0 }) : null);
+      }
+    }
+
     // Check if all enemies are dead
     const allEnemyDead = eWounds.every(w => w <= 0);
     if (allEnemyDead) {
@@ -2394,6 +2475,329 @@ export default function MissionSystem({ onNavigate, initialEncounter, initialPar
   function startCombat() {
     // This function is kept for compatibility but startMission now handles everything
     startMission();
+  }
+
+  // ── GRAPPLE HANDLERS ─────────────────────────────────────────────
+  function playerInitiateGrapple() {
+    const actor = initiativeOrder[currentTurn];
+    if (!actor || actor.type !== 'party') return;
+    const char = party[actor.index];
+    const attackerPos = gridPositions.party[actor.index];
+
+    // Find adjacent enemies (Chebyshev distance = 1)
+    const adjacentEnemies = [];
+    enemyWounds.forEach((wounds, idx) => {
+      if (wounds > 0) {
+        const ep = gridPositions.enemies[idx];
+        const dx = Math.abs(ep.x - attackerPos.x);
+        const dy = Math.abs(ep.y - attackerPos.y);
+        if (Math.max(dx, dy) <= 1) adjacentEnemies.push({ index: idx, enemy: encounter.enemies[idx] });
+      }
+    });
+
+    if (adjacentEnemies.length === 0) {
+      setCombatLog(prev => [...prev, { type: "player", text: "No enemy adjacent to grapple! Move closer first." }]);
+      return;
+    }
+
+    const { index: enemyIdx, enemy } = adjacentEnemies[0];
+
+    // Resolve charge phase (even at melee range, determines engagement quality)
+    const chargeResult = resolveChargePhase(char, enemy);
+    setCombatLog(prev => [...prev, ...chargeResult.log]);
+
+    // If defender reacts, they get a free action (simplified: free melee/dodge)
+    if (chargeResult.outcome === 'defender_reacts') {
+      const reactRoll = Math.floor(Math.random() * 100) + 1;
+      const reactTarget = enemy.stats?.meleeSkill || 20;
+      if (reactRoll <= reactTarget) {
+        const reactDmg = Math.max(1, Math.floor(Math.random() * 5) + 1);
+        setCombatLog(prev => [...prev, { type: 'enemy', text: `${enemy.name} lands an opportunity strike for ${reactDmg} damage!` }]);
+        eventBridge.emit('combat-float-text', { targetType: 'party', targetIndex: actor.index, text: `-${reactDmg}`, color: '#ff4444' });
+        setPartyWounds(prev => { const n = [...prev]; n[actor.index] = (n[actor.index] || 0) + reactDmg; return n; });
+      } else {
+        setCombatLog(prev => [...prev, { type: 'enemy', text: `${enemy.name} swings but misses the opportunity!` }]);
+      }
+    }
+
+    const messyContact = chargeResult.outcome === 'messy_contact';
+    const iStamina = calculateStaminaPool(char.stats?.toughness || 20, char.stats?.willpower || 20);
+    const dStamina = calculateStaminaPool(enemy.stats?.toughness || 20, enemy.stats?.willpower || 20);
+
+    const newGrapple = {
+      initiatorType: 'party',
+      initiatorIdx: actor.index,
+      defenderType: 'enemy',
+      defenderIdx: enemyIdx,
+      dominance: 0,
+      initiatorStamina: iStamina,
+      defenderStamina: dStamina,
+      messyContact,
+      round: 0,
+      grappleActionsUsed: 1, // initiating the grapple costs 1 of your 2 grapple actions this turn
+    };
+    setGrappleState(newGrapple);
+    setTurnState(prev => ({
+      ...prev,
+      half_actions_spent: 2, // lock out normal actions — grapple replaces them
+      in_grapple: true,
+      grapple_partner: enemyIdx,
+    }));
+    setCombatLog(prev => [...prev, {
+      type: 'player',
+      text: `${char.name} grapples ${enemy.name}! Dominance: 0 | Stamina: ${iStamina}/${dStamina}${messyContact ? ' (messy contact — both at -2)' : ''} — 1 grapple action remaining this turn.`,
+    }]);
+  }
+
+  // End grapple and return both characters to normal actions
+  function endGrapple() {
+    setGrappleState(null);
+    setTurnState(prev => ({ ...prev, in_grapple: false, grapple_partner: null }));
+  }
+
+  // Use one grapple action. If both used, advance normal initiative.
+  function spendGrappleAction(gs, updatedFields = {}) {
+    const newUsed = (gs.grappleActionsUsed || 0) + 1;
+    const updated = { ...gs, ...updatedFields, grappleActionsUsed: newUsed };
+    if (newUsed >= 2) {
+      // Both grapple actions spent — advance normal initiative
+      setGrappleState(updated);
+      setTimeout(() => advanceInitiative(currentTurn, initiativeOrder, gridPositions.party, gridPositions.enemies, enemyWoundsRef.current), 1000);
+    } else {
+      setGrappleState(updated);
+    }
+  }
+
+  // AI: resolve enemy grapple actions (called during enemyTurn when enemy is in grapple)
+  function resolveEnemyGrappleActions() {
+    const gs = grappleStateRef.current;
+    if (!gs) return;
+
+    const char = party[gs.initiatorIdx];
+    const enemy = encounter.enemies[gs.defenderIdx];
+    const isInitiator = gs.initiatorType === 'enemy';
+    const myDom = isInitiator ? gs.dominance : -gs.dominance;
+    const myStamina = isInitiator ? gs.initiatorStamina : gs.defenderStamina;
+
+    let currentGs = { ...gs };
+    const allLog = [];
+
+    // Enemy gets 2 grapple actions
+    for (let action = 0; action < 2; action++) {
+      if (!grappleStateRef.current) return; // Grapple ended mid-resolution
+
+      const availableActions = getAvailableGrappleActions(currentGs.dominance, isInitiator, myStamina);
+
+      if (myDom < -2) {
+        // Losing badly — try to break free
+        const result = resolveBreakAttempt(enemy, char);
+        allLog.push(...result.log);
+        if (result.success) {
+          allLog.push({ type: 'enemy', text: `${enemy.name} breaks free from the grapple!` });
+          setCombatLog(prev => [...prev, ...allLog]);
+          endGrapple();
+          return;
+        }
+      } else if (availableActions.length > 0 && myDom >= 2) {
+        // Winning — use best available action
+        const bestAction = availableActions[availableActions.length - 1];
+        const sb = Math.floor((enemy.stats?.strength || 20) / 10);
+        let dmg = 0;
+        if (['Light Strike', 'Headbutt', 'Choke', 'Joint Lock', 'Pin Attempt'].includes(bestAction)) {
+          dmg = Math.max(1, Math.floor(Math.random() * 6) + 1 + sb);
+          allLog.push({ type: 'enemy', text: `${enemy.name} uses ${bestAction} on ${char.name} for ${dmg} damage!` });
+          eventBridge.emit('combat-float-text', { targetType: 'party', targetIndex: gs.initiatorIdx, text: `-${dmg}`, color: '#ff4444' });
+          setPartyWounds(prev => { const n = [...prev]; n[gs.initiatorIdx] = (n[gs.initiatorIdx] || 0) + dmg; return n; });
+        } else if (['Throw', 'Takedown'].includes(bestAction)) {
+          dmg = Math.max(1, Math.floor(Math.random() * 6) + 3 + sb);
+          allLog.push({ type: 'enemy', text: `${enemy.name} throws ${char.name} for ${dmg} damage! Grapple ends.` });
+          eventBridge.emit('combat-float-text', { targetType: 'party', targetIndex: gs.initiatorIdx, text: `-${dmg}`, color: '#ff4444' });
+          setPartyWounds(prev => { const n = [...prev]; n[gs.initiatorIdx] = (n[gs.initiatorIdx] || 0) + dmg; return n; });
+          setCombatLog(prev => [...prev, ...allLog]);
+          endGrapple();
+          return;
+        } else if (['Submission', 'Knock Unconscious', 'Execution'].includes(bestAction)) {
+          dmg = Math.max(5, Math.floor(Math.random() * 10) + 5 + Math.floor((enemy.stats?.strength || 20) / 5));
+          allLog.push({ type: 'enemy', text: `${enemy.name} executes ${bestAction} on ${char.name} for ${dmg} damage!` });
+          eventBridge.emit('combat-float-text', { targetType: 'party', targetIndex: gs.initiatorIdx, text: `-${dmg}`, color: '#ff2222' });
+          setPartyWounds(prev => { const n = [...prev]; n[gs.initiatorIdx] = (n[gs.initiatorIdx] || 0) + dmg; return n; });
+          setCombatLog(prev => [...prev, ...allLog]);
+          endGrapple();
+          return;
+        } else {
+          allLog.push({ type: 'enemy', text: `${enemy.name} uses ${bestAction}.` });
+        }
+      } else {
+        // Neutral — wrestle for dominance
+        const result = resolveGrappleTurn(
+          isInitiator ? enemy : char,
+          isInitiator ? char : enemy,
+          currentGs.dominance,
+          {
+            initiatorStamina: currentGs.initiatorStamina,
+            defenderStamina: currentGs.defenderStamina,
+            initiatorMessy: currentGs.messyContact && currentGs.round === 0,
+            defenderMessy: currentGs.messyContact && currentGs.round === 0,
+          }
+        );
+        allLog.push(...result.log);
+        currentGs = { ...currentGs, dominance: result.newDominance };
+      }
+    }
+
+    setCombatLog(prev => [...prev, ...allLog]);
+    // Drain stamina each round the enemy acts
+    setGrappleState({
+      ...currentGs,
+      grappleActionsUsed: 2,
+      round: currentGs.round + 1,
+      initiatorStamina: Math.max(0, currentGs.initiatorStamina - 1),
+      defenderStamina: Math.max(0, currentGs.defenderStamina - 1),
+    });
+  }
+
+  function resolvePlayerGrappleTurn() {
+    const gs = grappleStateRef.current;
+    if (!gs || (gs.grappleActionsUsed || 0) >= 2) return;
+    const char = party[gs.initiatorIdx];
+    const enemy = encounter.enemies[gs.defenderIdx];
+    const activeWep = getActiveWeapon(char, gs.initiatorIdx, activeWeapons);
+
+    const result = resolveGrappleTurn(char, enemy, gs.dominance, {
+      initiatorWeaponId: activeWep?.id,
+      initiatorMessy: gs.messyContact && gs.round === 0,
+      initiatorStamina: gs.initiatorStamina,
+      defenderMessy: gs.messyContact && gs.round === 0,
+      defenderStamina: gs.defenderStamina,
+    });
+
+    setCombatLog(prev => [...prev, ...result.log]);
+
+    // Check for pin/submission at ±5
+    if (Math.abs(result.newDominance) >= 5) {
+      const winner = result.newDominance >= 5 ? char.name : enemy.name;
+      const loser = result.newDominance >= 5 ? enemy.name : char.name;
+      setCombatLog(prev => [...prev, { type: result.newDominance >= 5 ? 'player' : 'enemy', text: `${winner} has ${loser} in a SUBMISSION HOLD! Total control!` }]);
+    }
+
+    spendGrappleAction(gs, { dominance: result.newDominance });
+  }
+
+  function playerBreakGrapple() {
+    const gs = grappleStateRef.current;
+    if (!gs || (gs.grappleActionsUsed || 0) >= 2) return;
+    const char = party[gs.initiatorIdx];
+    const enemy = encounter.enemies[gs.defenderIdx];
+
+    const result = resolveBreakAttempt(char, enemy);
+    setCombatLog(prev => [...prev, ...result.log]);
+
+    if (result.success) {
+      setCombatLog(prev => [...prev, { type: 'player', text: `${char.name} breaks free from ${enemy.name}!` }]);
+      endGrapple();
+      setTimeout(() => advanceInitiative(currentTurn, initiativeOrder, gridPositions.party, gridPositions.enemies, enemyWoundsRef.current), 1000);
+      return;
+    }
+
+    spendGrappleAction(gs);
+  }
+
+  function playerReachSidearm() {
+    const gs = grappleStateRef.current;
+    if (!gs || (gs.grappleActionsUsed || 0) >= 2) return;
+    const char = party[gs.initiatorIdx];
+    const enemy = encounter.enemies[gs.defenderIdx];
+
+    const result = resolveReachAction(char, enemy, {
+      activeWeaponId: (encounter.enemies[gs.defenderIdx].weapons || [])[0]?.id,
+    });
+    setCombatLog(prev => [...prev, ...result.log]);
+
+    if (result.success) {
+      const sidearm = (char.equipment || []).map(e => getWeaponById(typeof e === 'string' ? e : e?.id)).find(w => w && w.type === 'Ranged' && (w.category === 'PISTOL' || w.name?.toLowerCase().includes('pistol')));
+      if (sidearm) {
+        setActiveWeapons(prev => ({ ...prev, [gs.initiatorIdx]: sidearm.id }));
+        setCombatLog(prev => [...prev, { type: 'player', text: `${char.name} draws ${sidearm.name}!` }]);
+      }
+    }
+
+    spendGrappleAction(gs, { dominance: gs.dominance + (result.dominanceChange || 0) });
+  }
+
+  function playerGrappleAction(actionName) {
+    const gs = grappleStateRef.current;
+    if (!gs || (gs.grappleActionsUsed || 0) >= 2) return;
+    const char = party[gs.initiatorIdx];
+    const enemy = encounter.enemies[gs.defenderIdx];
+    const enemyIdx = gs.defenderIdx;
+
+    let log = [];
+    let dmg = 0;
+
+    switch (actionName) {
+      case 'Light Strike':
+      case 'Headbutt':
+        dmg = Math.max(1, Math.floor(Math.random() * 5) + 1 + Math.floor((char.stats?.strength || 20) / 10));
+        log.push({ type: 'player', text: `${char.name} lands a ${actionName} on ${enemy.name} for ${dmg} damage!` });
+        eventBridge.emit('combat-float-text', { targetType: 'enemy', targetIndex: enemyIdx, text: `-${dmg}`, color: '#ff4444' });
+        break;
+      case 'Shove':
+      case 'Reposition':
+        log.push({ type: 'player', text: `${char.name} shoves ${enemy.name}! Repositioning...` });
+        break;
+      case 'Weapon Grab':
+      case 'Disarm':
+        log.push({ type: 'player', text: `${char.name} disarms ${enemy.name}!` });
+        break;
+      case 'Pin Attempt':
+      case 'Joint Lock':
+      case 'Choke':
+        dmg = Math.max(1, Math.floor(Math.random() * 8) + 1 + Math.floor((char.stats?.strength || 20) / 10));
+        log.push({ type: 'player', text: `${char.name} applies a ${actionName} on ${enemy.name} for ${dmg} damage!` });
+        eventBridge.emit('combat-float-text', { targetType: 'enemy', targetIndex: enemyIdx, text: `-${dmg}`, color: '#ff4444' });
+        break;
+      case 'Throw':
+      case 'Takedown':
+        dmg = Math.max(1, Math.floor(Math.random() * 6) + 3 + Math.floor((char.stats?.strength || 20) / 10));
+        log.push({ type: 'player', text: `${char.name} throws ${enemy.name} to the ground for ${dmg} damage!` });
+        eventBridge.emit('combat-float-text', { targetType: 'enemy', targetIndex: enemyIdx, text: `-${dmg}`, color: '#ff4444' });
+        break;
+      case 'Submission':
+      case 'Knock Unconscious':
+      case 'Execution':
+        dmg = Math.max(5, Math.floor(Math.random() * 10) + 5 + Math.floor((char.stats?.strength || 20) / 5));
+        log.push({ type: 'player', text: `${char.name} executes a devastating ${actionName} on ${enemy.name} for ${dmg} damage!` });
+        eventBridge.emit('combat-float-text', { targetType: 'enemy', targetIndex: enemyIdx, text: `-${dmg}`, color: '#ff2222' });
+        break;
+      default:
+        log.push({ type: 'player', text: `${char.name} performs ${actionName} on ${enemy.name}.` });
+    }
+
+    const endsGrapple = ['Throw', 'Takedown', 'Submission', 'Knock Unconscious', 'Execution'].includes(actionName);
+
+    if (dmg > 0) {
+      const newEnemyWounds = [...enemyWounds];
+      newEnemyWounds[enemyIdx] = Math.max(0, newEnemyWounds[enemyIdx] - dmg);
+      setEnemyWounds(newEnemyWounds);
+      log.push({ type: 'player', text: `${enemy.name}: ${Math.max(0, newEnemyWounds[enemyIdx])}/${enemy.wounds} wounds remaining.` });
+      if (newEnemyWounds[enemyIdx] <= 0) {
+        eventBridge.emit('combat-death', { targetType: 'enemy', targetIndex: enemyIdx });
+        log.push({ type: 'player', text: `The ${enemy.name} is DEFEATED!` });
+        setCombatLog(prev => [...prev, ...log]);
+        endGrapple();
+        setTimeout(() => advanceInitiative(currentTurn, initiativeOrder, gridPositions.party, gridPositions.enemies, newEnemyWounds), 1000);
+        return;
+      }
+    }
+
+    setCombatLog(prev => [...prev, ...log]);
+
+    if (endsGrapple) {
+      endGrapple();
+      setTimeout(() => advanceInitiative(currentTurn, initiativeOrder, gridPositions.party, gridPositions.enemies, enemyWoundsRef.current), 1000);
+    } else {
+      spendGrappleAction(gs);
+    }
   }
 
   function playerAttack(attackType = 'standard', targetIdx = null) {
@@ -2845,6 +3249,15 @@ export default function MissionSystem({ onNavigate, initialEncounter, initialPar
       return;
     }
     
+    // If this enemy is in a grapple, resolve grapple actions instead of normal turn
+    const gs = grappleStateRef.current;
+    if (gs && gs.defenderType === 'enemy' && gs.defenderIdx === actor.index) {
+      setCombatLog(prev => [...prev, { type: 'enemy', text: `${encounter.enemies[actor.index]?.name} struggles in the grapple!` }]);
+      resolveEnemyGrappleActions();
+      setTimeout(() => advanceInitiative(actorIndex, init, partyPos, enemyPosList, enemyWoundsRef.current), 1500);
+      return;
+    }
+
     const enemy = encounter.enemies[actor.index];
     const enemyPos = enemyPosList[actor.index];
     if (!enemyPos) {
