@@ -404,6 +404,7 @@ export default function MissionSystem({ onNavigate, initialEncounter, initialPar
   const [enemyReactionsUsed,  setEnemyReactionsUsed]  = useState([]); // boolean[] — enemy used their 1 reaction this round
   const [grenadeMode, setGrenadeMode] = useState(false);   // true when targeting grenade throw on grid
   const [roundCounter, setRoundCounter] = useState(0);     // increments each time initiative loops
+  const ambushFreeRoundRef = useRef(false); // true during ambush free round — suppresses advanceInitiative
   // ── Grapple state ──
   // grappleState: { initiatorType, initiatorIdx, defenderType, defenderIdx, dominance,
   //   initiatorStamina, defenderStamina, messyContact, round, grappleActionsUsed: 0 }
@@ -434,9 +435,13 @@ export default function MissionSystem({ onNavigate, initialEncounter, initialPar
   const enemyPinnedRef         = useRef([]);
   const partyReactionsUsedRef  = useRef([]);
   const enemyReactionsUsedRef  = useRef([]);
+  const encounterRef           = useRef(null);
+  const gridPositionsRef       = useRef({ party: [], enemies: [] });
   // Keep refs in sync
   useEffect(() => { partyWoundsRef.current          = partyWounds;          }, [partyWounds]);
   useEffect(() => { enemyWoundsRef.current          = enemyWounds;          }, [enemyWounds]);
+  useEffect(() => { encounterRef.current            = encounter;            }, [encounter]);
+  useEffect(() => { gridPositionsRef.current        = gridPositions;        }, [gridPositions]);
   useEffect(() => { enemyPinnedRef.current          = enemyPinned;          }, [enemyPinned]);
   useEffect(() => { partyReactionsUsedRef.current   = partyReactionsUsed;   }, [partyReactionsUsed]);
   useEffect(() => { enemyReactionsUsedRef.current   = enemyReactionsUsed;   }, [enemyReactionsUsed]);
@@ -1630,10 +1635,13 @@ export default function MissionSystem({ onNavigate, initialEncounter, initialPar
     setPartyWounds(combatParty.map(() => 0));
     setCurrentPartyMember(0);
     setEncounter(combatEncounter);
+    encounterRef.current = combatEncounter; // Sync ref immediately for ambush free round
     setFateSpentInMission(combatParty.map(() => false));
     setSelectedMovementTarget(null);
     setCurrentTurn(0);
-    setEnemyWounds(combatEncounter.enemies.map(e => e.wounds));
+    const initialEnemyWounds = combatEncounter.enemies.map(e => e.wounds);
+    setEnemyWounds(initialEnemyWounds);
+    enemyWoundsRef.current = initialEnemyWounds; // Sync ref immediately for ambush free round
     setCurrentEnemy(0);
 
     // Initialize grid positions
@@ -1679,6 +1687,7 @@ export default function MissionSystem({ onNavigate, initialEncounter, initialPar
     setTerrain(generatedTerrain);
     terrainRef.current = generatedTerrain;
     setGridPositions({ party: partyPositions, enemies: enemyPositions });
+    gridPositionsRef.current = { party: partyPositions, enemies: enemyPositions }; // Sync ref for ambush free round
     setPartyBodyWounds(combatParty.map(() => emptyBodyWounds()));
     setEnemyBodyWounds(combatEncounter.enemies.map(() => emptyBodyWounds()));
 
@@ -1728,12 +1737,46 @@ export default function MissionSystem({ onNavigate, initialEncounter, initialPar
     setCombatAction('movement');
     setPhase("combat");
 
-    setTimeout(() => {
-      const firstActor = initiative[0];
-      if (firstActor?.type === 'enemy') {
-        enemyTurn(0, initiative, partyPositions, enemyPositions);
+    // AMBUSH: enemies get a full free round before normal initiative
+    if (combatEncounter._isAmbush) {
+      setCombatLog(prev => [...prev, { type: 'system', text: '⚠ AMBUSH! Enemies act first — free round!' }]);
+      ambushFreeRoundRef.current = true;
+
+      // Collect all enemy initiative indices in initiative order
+      const enemyInitIndices = initiative
+        .map((entry, idx) => ({ entry, idx }))
+        .filter(({ entry }) => entry.type === 'enemy')
+        .map(({ idx }) => idx);
+
+      // Chain enemy turns sequentially: each reads latest positions from refs
+      function runAmbushEnemy(queueIndex) {
+        if (queueIndex >= enemyInitIndices.length) {
+          // Free round complete — unlock initiative and start normal round
+          ambushFreeRoundRef.current = false;
+          setCombatLog(prev => [...prev, { type: 'system', text: '— Ambush round complete. Normal initiative begins. —' }]);
+          setCurrentTurn(0);
+          const firstActor = initiative[0];
+          if (firstActor?.type === 'enemy') {
+            setTimeout(() => enemyTurn(0, initiative), 500);
+          }
+          return;
+        }
+        const initIdx = enemyInitIndices[queueIndex];
+        setCurrentTurn(initIdx);
+        // Don't pass positions — enemyTurn reads from gridPositionsRef for latest
+        enemyTurn(initIdx, initiative);
+        setTimeout(() => runAmbushEnemy(queueIndex + 1), 2000);
       }
-    }, 500);
+
+      setTimeout(() => runAmbushEnemy(0), 500);
+    } else {
+      setTimeout(() => {
+        const firstActor = initiative[0];
+        if (firstActor?.type === 'enemy') {
+          enemyTurn(0, initiative, partyPositions, enemyPositions);
+        }
+      }, 500);
+    }
   }
 
   function resolveSkillCheck() {
@@ -2351,6 +2394,8 @@ export default function MissionSystem({ onNavigate, initialEncounter, initialPar
   }
 
   function advanceInitiative(turnIndex, initiativeArray, partyPositions, enemyPositions, currentEnemyWounds) {
+    // During ambush free round, suppress normal initiative advancement
+    if (ambushFreeRoundRef.current) return;
     const currentTurnIndex = turnIndex !== undefined ? turnIndex : currentTurn;
     const init = initiativeArray || initiativeOrder;
     const partyPos = partyPositions || gridPositions.party;
@@ -3232,8 +3277,8 @@ export default function MissionSystem({ onNavigate, initialEncounter, initialPar
     // Use provided data or fall back to state
     const actorIndex = turnIndex !== undefined ? turnIndex : currentTurn;
     const init = initiativeArray || initiativeOrder;
-    const partyPos = partyPositions || gridPositions.party;
-    const enemyPosList = enemyPositions || gridPositions.enemies;
+    const partyPos = partyPositions || gridPositionsRef.current.party || gridPositions.party;
+    const enemyPosList = enemyPositions || gridPositionsRef.current.enemies || gridPositions.enemies;
     const actor = init[actorIndex];
     console.log("enemyTurn: actorIndex =", actorIndex, "actor =", actor);
     if (!actor || actor.type !== 'enemy') {
@@ -3249,16 +3294,22 @@ export default function MissionSystem({ onNavigate, initialEncounter, initialPar
       return;
     }
     
+    const currentEncounter = encounterRef.current || encounter;
+    const enemy = currentEncounter?.enemies?.[actor.index];
+    if (!enemy) {
+      console.log("enemyTurn: enemy data not found, skipping");
+      setTimeout(() => advanceInitiative(actorIndex, init, partyPos, enemyPosList, enemyWoundsRef.current), 100);
+      return;
+    }
+
     // If this enemy is in a grapple, resolve grapple actions instead of normal turn
     const gs = grappleStateRef.current;
     if (gs && gs.defenderType === 'enemy' && gs.defenderIdx === actor.index) {
-      setCombatLog(prev => [...prev, { type: 'enemy', text: `${encounter.enemies[actor.index]?.name} struggles in the grapple!` }]);
+      setCombatLog(prev => [...prev, { type: 'enemy', text: `${enemy.name} struggles in the grapple!` }]);
       resolveEnemyGrappleActions();
       setTimeout(() => advanceInitiative(actorIndex, init, partyPos, enemyPosList, enemyWoundsRef.current), 1500);
       return;
     }
-
-    const enemy = encounter.enemies[actor.index];
     const enemyPos = enemyPosList[actor.index];
     if (!enemyPos) {
       console.log("enemyTurn: enemy position not found");
@@ -3359,6 +3410,7 @@ export default function MissionSystem({ onNavigate, initialEncounter, initialPar
       if (bestMove) {
         newEnemyPositions[actor.index] = { x: bestMove.x, y: bestMove.y };
         setGridPositions(prev => ({ ...prev, enemies: newEnemyPositions }));
+        gridPositionsRef.current = { ...gridPositionsRef.current, enemies: newEnemyPositions };
         currentEnemyPos = { x: bestMove.x, y: bestMove.y };
         moved = true;
         log.push({ type: "enemy", text: `${enemy.name} moves ${bestMove.dist} squares toward ${target.name}.` });
