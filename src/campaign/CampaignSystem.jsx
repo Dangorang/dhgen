@@ -52,6 +52,10 @@ export default function CampaignSystem({ onNavigate }) {
       if (encounter && state.combatContext?.ambushLayout) {
         encounter._ambushLayout = state.combatContext.ambushLayout;
       }
+      // Mark any ambush encounter (surround or regular) so enemies get a free round
+      if (encounter && (state.combatContext?.ambushLayout || state.combatContext?.sourceEntityType === 'squad' || state.combatContext?.sourceEntityType === 'ambush')) {
+        encounter._isAmbush = true;
+      }
       return (
         <MissionSystem
           initialEncounter={encounter}
