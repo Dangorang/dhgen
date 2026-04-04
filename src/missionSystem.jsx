@@ -1200,8 +1200,11 @@ export default function MissionSystem({ onNavigate, initialEncounter, initialPar
                     {turnState.grenade_primed && <span style={{ color: '#ff6644', marginLeft: 6 }}>[GRENADE PRIMED!]</span>}
                   </div>
 
-                  {/* ── GRAPPLE IN-PROGRESS PANEL (replaces normal actions) ── */}
-                  {grappleState && (grappleState.grappleActionsUsed || 0) < 2 && (() => {
+                  {/* ── GRAPPLE IN-PROGRESS PANEL (only for the character actually grappling) ── */}
+                  {grappleState && (grappleState.grappleActionsUsed || 0) < 2 && (
+                    (grappleState.initiatorType === 'party' && grappleState.initiatorIdx === actIdx) ||
+                    (grappleState.defenderType === 'party' && grappleState.defenderIdx === actIdx)
+                  ) && (() => {
                     const isInitiator = grappleState.initiatorType === 'party' && grappleState.initiatorIdx === actIdx;
                     const myStamina = isInitiator ? grappleState.initiatorStamina : grappleState.defenderStamina;
                     const grappleActions = getAvailableGrappleActions(grappleState.dominance, isInitiator, myStamina);
@@ -1240,8 +1243,11 @@ export default function MissionSystem({ onNavigate, initialEncounter, initialPar
                     );
                   })()}
 
-                  {/* ── SECTIONED ACTIONS (when not grappling) ── */}
-                  {!grappleState && (
+                  {/* ── SECTIONED ACTIONS (when this character is not grappling) ── */}
+                  {!(grappleState && (
+                    (grappleState.initiatorType === 'party' && grappleState.initiatorIdx === actIdx) ||
+                    (grappleState.defenderType === 'party' && grappleState.defenderIdx === actIdx)
+                  )) && (
                     <div style={{ display: "flex", gap: 10, flexWrap: "wrap", marginBottom: 6 }}>
 
                       {/* ════════ SECTION 1: BASIC ACTIONS ════════ */}
