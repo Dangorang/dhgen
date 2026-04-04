@@ -123,107 +123,120 @@ export default function ExplorationSystem({ state, dispatch }) {
     addLog(`Moved to [${x}, ${y}]. Tick ${state.exploration.actionTick + 1}.`);
 
     // Process NPC actions
-    if (state.npcs.administrator) {
-      const tick = state.exploration.actionTick + 1;
-      const { npcs: updatedNPCs, events } = processNPCTick(
-        state.npcs, state.threat.level, { x, y }, regionId, tick
-      );
-      dispatch({ type: "SET_NPCS", npcs: updatedNPCs });
-      for (const evt of events) {
-        dispatch({ type: "LOG_EVENT", event: evt });
-        if (evt.action === "intel_delivery") {
-          addLog(`[INTEL] ${evt.details}`);
-        }
-      }
-
-      // Check for encounters — use deployed squad
-      const squad = state.deployedSquad?.length > 0
-        ? state.deployedSquad
-        : JSON.parse(localStorage.getItem("dhgen_roster") || "[]");
-      const perStat = squad[0]?.stats?.perception || squad[0]?.stats?.Per || 30;
-      const encounters = checkEncounters(updatedNPCs, { x, y }, regionId, perStat, tick);
-      let combatTriggered = false;
-      for (const enc of encounters) {
-        if (enc.type === "agent_detected" || enc.type === "squad_detected") {
-          addLog(`⚠ CONTACT: ${enc.entity.name || enc.entity.id} detected ${enc.distance} tiles away!`);
-        } else if (enc.type === "ambush" || enc.type === "agent_encounter" || enc.type === "leader_ambush") {
-          const label = enc.type === "leader_ambush" ? "AMBUSH — SURROUNDED"
-            : enc.type === "ambush" ? "AMBUSH"
-            : "ENCOUNTER";
-          addLog(`⚠ ${label}! ${enc.entity.name} attacks!`);
-          const combatNarr = combatStartNarrative(enc.type, enc.entity.name);
-          if (combatNarr) addLog(`[NARRATIVE] ${combatNarr}`);
-          dispatch({ type: "UPDATE_THREAT", delta: enc.type === "leader_ambush" ? 8 : enc.type === "ambush" ? 5 : 3 });
-
-          // Mark leader ambush as triggered
-          if (enc.type === "leader_ambush" && updatedNPCs.loyalistLeader) {
-            const leader = { ...updatedNPCs.loyalistLeader };
-            leader.ambushesSet = (leader.ambushesSet || []).map(a =>
-              a.id === enc.entity.id ? { ...a, triggered: true } : a
-            );
-            updatedNPCs.loyalistLeader = leader;
-            dispatch({ type: "SET_NPCS", npcs: updatedNPCs });
-          }
-
-          if (!combatTriggered) {
-            combatTriggered = true;
-            // Build combat party from deployed squad (up to 8)
-            const combatParty = squad.filter(c => c && !c.kia).slice(0, 8);
-            if (combatParty.length > 0) {
-              // Generate encounter enemies based on squad strength or single agent
-              const rank = getRank(combatParty[0]?.xp || 0);
-              const enemyCount = enc.entity.strength || 1;
-              const fakeMission = { name: "Field Encounter", flavor: "loyalist", type: "investigation", tier: state.threat.level > 60 ? "Deadly" : state.threat.level > 30 ? "Dangerous" : "Routine", rank };
-              const combatEncounter = generateEncounter(fakeMission, "LOWER_DISTRICTS", rank);
-              // Trim to match squad size
-              combatEncounter.enemies = combatEncounter.enemies.slice(0, enemyCount);
-
-              const sourceType = enc.type === "leader_ambush" ? "ambush"
-                : enc.type === "ambush" ? "squad"
-                : "agent";
-              dispatch({
-                type: "START_COMBAT",
-                context: {
-                  encounter: combatEncounter,
-                  party: combatParty,
-                  sourceEntityId: enc.entity.id,
-                  sourceEntityType: sourceType,
-                  ambushLayout: enc.ambushLayout || null, // "surround" for leader ambushes
-                },
-              });
-            }
-          }
-        }
-      }
-
-      // Threat escalation — the longer you're here, the more desperate they get
-      if (tick % 8 === 0) {
-        dispatch({ type: "UPDATE_THREAT", delta: 2 });
-      }
-    }
+    processWorldTick({ x, y });
   }, [playerPos, region, state.exploration.actionTick, state.npcs, state.threat.level, regionId, dispatch]);
 
-  // Handle investigation
-  const handleInvestigate = () => {
-    if (!selectedPOI) return;
+  // Shared NPC tick processor — called on movement AND investigation cycles
+  const processWorldTick = useCallback((pos) => {
+    if (!state.npcs.administrator) return;
+    const tick = state.exploration.actionTick + 1;
+    const { npcs: updatedNPCs, events } = processNPCTick(
+      state.npcs, state.threat.level, pos, regionId, tick
+    );
+    dispatch({ type: "SET_NPCS", npcs: updatedNPCs });
+    for (const evt of events) {
+      dispatch({ type: "LOG_EVENT", event: evt });
+      if (evt.action === "intel_delivery") {
+        addLog(`[INTEL] ${evt.details}`);
+      }
+    }
 
-    // Simple perception + intelligence check (d100 vs stat average)
+    // Check for encounters — use deployed squad
     const squad = state.deployedSquad?.length > 0
       ? state.deployedSquad
       : JSON.parse(localStorage.getItem("dhgen_roster") || "[]");
-    const lead = squad[0]; // use prefect/first character's stats
+    const perStat = squad[0]?.stats?.perception || squad[0]?.stats?.Per || 30;
+    const encounters = checkEncounters(updatedNPCs, pos, regionId, perStat, tick);
+    let combatTriggered = false;
+    for (const enc of encounters) {
+      if (enc.type === "agent_detected" || enc.type === "squad_detected") {
+        addLog(`⚠ CONTACT: ${enc.entity.name || enc.entity.id} detected ${enc.distance} tiles away!`);
+      } else if (enc.type === "ambush" || enc.type === "agent_encounter" || enc.type === "leader_ambush") {
+        const label = enc.type === "leader_ambush" ? "AMBUSH — SURROUNDED"
+          : enc.type === "ambush" ? "AMBUSH"
+          : "ENCOUNTER";
+        addLog(`⚠ ${label}! ${enc.entity.name} attacks!`);
+        const combatNarr = combatStartNarrative(enc.type, enc.entity.name);
+        if (combatNarr) addLog(`[NARRATIVE] ${combatNarr}`);
+        dispatch({ type: "UPDATE_THREAT", delta: enc.type === "leader_ambush" ? 8 : enc.type === "ambush" ? 5 : 3 });
+
+        // Mark leader ambush as triggered
+        if (enc.type === "leader_ambush" && updatedNPCs.loyalistLeader) {
+          const leader = { ...updatedNPCs.loyalistLeader };
+          leader.ambushesSet = (leader.ambushesSet || []).map(a =>
+            a.id === enc.entity.id ? { ...a, triggered: true } : a
+          );
+          updatedNPCs.loyalistLeader = leader;
+          dispatch({ type: "SET_NPCS", npcs: updatedNPCs });
+        }
+
+        if (!combatTriggered) {
+          combatTriggered = true;
+          const combatParty = squad.filter(c => c && !c.kia).slice(0, 8);
+          if (combatParty.length > 0) {
+            const rank = getRank(combatParty[0]?.xp || 0);
+            const enemyCount = enc.entity.strength || 1;
+            const fakeMission = { name: "Field Encounter", flavor: "loyalist", type: "investigation", tier: state.threat.level > 60 ? "Deadly" : state.threat.level > 30 ? "Dangerous" : "Routine", rank };
+            const combatEncounter = generateEncounter(fakeMission, "LOWER_DISTRICTS", rank);
+            combatEncounter.enemies = combatEncounter.enemies.slice(0, enemyCount);
+
+            const sourceType = enc.type === "leader_ambush" ? "ambush"
+              : enc.type === "ambush" ? "squad"
+              : "agent";
+            dispatch({
+              type: "START_COMBAT",
+              context: {
+                encounter: combatEncounter,
+                party: combatParty,
+                sourceEntityId: enc.entity.id,
+                sourceEntityType: sourceType,
+                ambushLayout: enc.ambushLayout || null,
+              },
+            });
+          }
+        }
+      }
+    }
+
+    // Threat escalation — the longer you're here, the more desperate they get
+    if (tick % 8 === 0) {
+      dispatch({ type: "UPDATE_THREAT", delta: 2 });
+    }
+  }, [state.npcs, state.threat.level, state.exploration.actionTick, state.deployedSquad, regionId, dispatch]);
+
+  // Investigation state: cycles time until success, progressively easier each attempt
+  const [investigationAttempts, setInvestigationAttempts] = useState(0);
+  const [investigating, setInvestigating] = useState(false); // true while cycling
+
+  // Handle investigation — each attempt cycles ~2 hours of game time (1 tick per cycle)
+  // Each failed cycle adds +10 cumulative bonus, so it always eventually succeeds
+  const handleInvestigate = () => {
+    if (!selectedPOI) return;
+
+    const squad = state.deployedSquad?.length > 0
+      ? state.deployedSquad
+      : JSON.parse(localStorage.getItem("dhgen_roster") || "[]");
+    const lead = squad[0];
     const per = lead?.stats?.perception || lead?.stats?.Per || 30;
     const int = lead?.stats?.intelligence || lead?.stats?.Int || 30;
-    const target = Math.floor((per + int) / 2);
+    const baseTarget = Math.floor((per + int) / 2);
+    const progressBonus = investigationAttempts * 10; // +10 per previous failed cycle
+    const target = Math.min(95, baseTarget + progressBonus); // cap at 95
     const roll = Math.floor(Math.random() * 100) + 1;
     const success = roll <= target;
 
+    // Each cycle advances 1 tick (~2 hours), enemies move and may interrupt
+    dispatch({ type: "MOVE_PLAYER", position: playerPos }); // tick + NPC actions
+    processWorldTick(playerPos); // NPC movement, encounters, threat escalation
+    dispatch({ type: "UPDATE_THREAT", delta: 1 }); // slight threat increase per cycle
+
     if (success) {
-      // Generate a clue
+      // Investigation complete
       const clue = generateClue(planet, region, selectedPOI);
       dispatch({ type: "ADD_CLUE", clue });
-      dispatch({ type: "UPDATE_THREAT", delta: 3 });
-      addLog(`INVESTIGATION SUCCESS (rolled ${roll} vs ${target}): ${clue.text}`);
+      dispatch({ type: "UPDATE_THREAT", delta: 2 }); // additional threat on success
+      const totalCycles = investigationAttempts + 1;
+      addLog(`INVESTIGATION COMPLETE after ${totalCycles} cycle${totalCycles > 1 ? 's' : ''} (~${totalCycles * 2}h) — rolled ${roll} vs ${target}: ${clue.text}`);
       const narr = investigationNarrative(true, selectedPOI.name);
       if (narr) addLog(`[NARRATIVE] ${narr}`);
       const clueNarr = clueNarrative(clue, state.exploration.discoveredClues.length + 1);
@@ -236,7 +249,6 @@ export default function ExplorationSystem({ state, dispatch }) {
         const updatedPois = r.pois.map((p) =>
           p.id === selectedPOI.id ? { ...p, investigated: true } : p
         );
-        // Every 2 clues, a new POI is revealed in this region from the intelligence
         if (totalClues % 2 === 0) {
           const newPOI = generateIntelPOI(r, totalClues, updatedPois);
           if (newPOI) {
@@ -246,7 +258,6 @@ export default function ExplorationSystem({ state, dispatch }) {
         }
         return { ...r, pois: updatedPois };
       });
-      // Also occasionally reveal a POI in another region
       if (totalClues % 3 === 0 && planet.regions.length > 1) {
         const otherRegions = planet.regions.filter((r) => r.id !== regionId);
         const targetRegion = otherRegions[Math.floor(Math.random() * otherRegions.length)];
@@ -264,16 +275,27 @@ export default function ExplorationSystem({ state, dispatch }) {
         planet: { ...planet, regions: updatedRegions },
       });
       setSelectedPOI(null);
+      setInvestigationAttempts(0);
+      setInvestigating(false);
     } else {
+      // Failed cycle — time passes, enemies act, try again
+      const newAttempts = investigationAttempts + 1;
+      setInvestigationAttempts(newAttempts);
+      setInvestigating(true);
+      const nextBonus = newAttempts * 10;
+      const nextTarget = Math.min(95, baseTarget + nextBonus);
       dispatch({ type: "UPDATE_THREAT", delta: selectedPOI.compromised ? 1 : 0 });
-      addLog(`INVESTIGATION FAILED (rolled ${roll} vs ${target}). No clue found.`);
+      addLog(`INVESTIGATING ${selectedPOI.name}... cycle ${newAttempts} (~${newAttempts * 2}h elapsed) — rolled ${roll} vs ${target}. Progress: next attempt at ${nextTarget}%.`);
       const failNarr = investigationNarrative(false, selectedPOI.name);
       if (failNarr) addLog(`[NARRATIVE] ${failNarr}`);
-      setSelectedPOI(null);
     }
+  };
 
-    // Advance tick
-    dispatch({ type: "MOVE_PLAYER", position: playerPos }); // tick advance without moving
+  // Reset investigation progress when deselecting a POI
+  const cancelInvestigation = () => {
+    setSelectedPOI(null);
+    setInvestigationAttempts(0);
+    setInvestigating(false);
   };
 
   if (!region) {
@@ -294,7 +316,7 @@ export default function ExplorationSystem({ state, dispatch }) {
       <style>{`
         @import url('https://fonts.googleapis.com/css2?family=Cinzel:wght@400;600;700&family=Cinzel+Decorative:wght@700&family=Share+Tech+Mono&display=swap');
         .exploration-body { display: flex; flex: 1; overflow: hidden; }
-        .exploration-grid { flex: 0 0 620px; display: flex; align-items: center; justify-content: center; padding: 10px; }
+        .exploration-grid { flex: 0 0 620px; display: flex; flex-direction: column; align-items: stretch; padding: 10px; }
         .exploration-panel { flex: 1; border-left: 1px solid #1e3d5c; overflow-y: auto; padding: 16px; display: flex; flex-direction: column; }
       `}</style>
 
@@ -311,24 +333,28 @@ export default function ExplorationSystem({ state, dispatch }) {
             — {region.subBiome.toUpperCase()} —
           </span>
         </div>
-        <div style={{ display: "flex", gap: 8 }}>
-          <button onClick={() => dispatch({ type: "BACK_TO_PLANET" })} style={{
-            background: "transparent", border: "1px solid #1e3d5c",
-            color: "#2e5a82", fontFamily: "'Cinzel', serif",
-            fontSize: 9, letterSpacing: 3, padding: "5px 12px",
-            cursor: "pointer", transition: "all 0.2s",
-          }}
-            onMouseEnter={(e) => { e.currentTarget.style.borderColor = "#c8a84a"; e.currentTarget.style.color = "#c8a84a"; }}
-            onMouseLeave={(e) => { e.currentTarget.style.borderColor = "#1e3d5c"; e.currentTarget.style.color = "#2e5a82"; }}
-          >
-            ← CHANGE REGION
-          </button>
-        </div>
       </div>
 
       <div className="exploration-body">
-        {/* Phaser grid */}
+        {/* Phaser grid + map controls above it */}
         <div className="exploration-grid">
+          {/* Map toolbar — above the grid */}
+          <div style={{
+            display: "flex", gap: 8, padding: "6px 8px",
+            borderBottom: "1px solid #1e3d5c", background: "rgba(6,8,15,0.9)",
+          }}>
+            <button onClick={() => dispatch({ type: "BACK_TO_PLANET" })} style={{
+              background: "transparent", border: "1px solid #c8a84a",
+              color: "#c8a84a", fontFamily: "'Cinzel', serif",
+              fontSize: 9, letterSpacing: 3, padding: "5px 12px",
+              cursor: "pointer", transition: "all 0.2s",
+            }}
+              onMouseEnter={(e) => { e.currentTarget.style.background = "rgba(200,168,74,0.1)"; e.currentTarget.style.color = "#e8d090"; }}
+              onMouseLeave={(e) => { e.currentTarget.style.background = "transparent"; e.currentTarget.style.color = "#c8a84a"; }}
+            >
+              ← CHANGE REGION
+            </button>
+          </div>
           <PhaserGame
             gridState={gridState}
             onGridClick={handleGridClick}
@@ -432,29 +458,58 @@ export default function ExplorationSystem({ state, dispatch }) {
 
           {/* Investigation prompt */}
           {selectedPOI && (
-            <div style={{ marginBottom: 12, border: "1px solid #1e4a7a",
-              background: "rgba(30,74,122,0.15)", padding: "10px" }}>
+            <div style={{ marginBottom: 12, border: `1px solid ${investigating ? '#c8a84a' : '#1e4a7a'}`,
+              background: investigating ? "rgba(200,168,74,0.08)" : "rgba(30,74,122,0.15)", padding: "10px" }}>
               <div style={{ fontSize: 11, color: "#c8a84a", fontFamily: "'Cinzel', serif",
                 marginBottom: 4 }}>
                 {selectedPOI.name}
               </div>
               <div style={{ fontSize: 10, color: "#2e5a82",
-                fontFamily: "'Share Tech Mono', monospace", marginBottom: 8 }}>
+                fontFamily: "'Share Tech Mono', monospace", marginBottom: 4 }}>
                 {selectedPOI.type.replace(/_/g, " ").toUpperCase()}
               </div>
-              <button onClick={handleInvestigate} style={{
-                display: "block", width: "100%",
-                background: "linear-gradient(180deg, #0c1a2e 0%, #080f1c 100%)",
-                border: "1px solid #c8a84a", color: "#c8a84a",
-                fontFamily: "'Cinzel', serif", fontSize: 10,
-                letterSpacing: 2, padding: "8px", cursor: "pointer",
-                transition: "all 0.2s",
-              }}
-                onMouseEnter={(e) => { e.currentTarget.style.color = "#e8d090"; }}
-                onMouseLeave={(e) => { e.currentTarget.style.color = "#c8a84a"; }}
-              >
-                ⬡ INVESTIGATE
-              </button>
+              {/* Progress bar when investigating */}
+              {investigating && (
+                <div style={{ marginBottom: 8 }}>
+                  <div style={{ fontSize: 9, color: "#c8a84a", fontFamily: "'Share Tech Mono', monospace", marginBottom: 4 }}>
+                    Investigating... Cycle {investigationAttempts} (~{investigationAttempts * 2}h elapsed)
+                  </div>
+                  <div style={{ height: 6, background: "#0c1824", border: "1px solid #1e3d5c", overflow: "hidden" }}>
+                    <div style={{
+                      width: `${Math.min(100, investigationAttempts * 10)}%`, height: "100%",
+                      background: "linear-gradient(90deg, #1e4a7a, #c8a84a)",
+                      transition: "width 0.3s",
+                    }} />
+                  </div>
+                </div>
+              )}
+              <div style={{ display: "flex", gap: 6 }}>
+                <button onClick={handleInvestigate} style={{
+                  flex: 1,
+                  background: "linear-gradient(180deg, #0c1a2e 0%, #080f1c 100%)",
+                  border: "1px solid #c8a84a", color: "#c8a84a",
+                  fontFamily: "'Cinzel', serif", fontSize: 10,
+                  letterSpacing: 2, padding: "8px", cursor: "pointer",
+                  transition: "all 0.2s",
+                }}
+                  onMouseEnter={(e) => { e.currentTarget.style.color = "#e8d090"; }}
+                  onMouseLeave={(e) => { e.currentTarget.style.color = "#c8a84a"; }}
+                >
+                  {investigating ? '⬡ CONTINUE' : '⬡ INVESTIGATE'}
+                </button>
+                {investigating && (
+                  <button onClick={cancelInvestigation} style={{
+                    background: "transparent", border: "1px solid #3a2020",
+                    color: "#804040", fontFamily: "'Cinzel', serif", fontSize: 9,
+                    padding: "8px 12px", cursor: "pointer", transition: "all 0.2s",
+                  }}
+                    onMouseEnter={(e) => { e.currentTarget.style.borderColor = "#a05050"; e.currentTarget.style.color = "#c06060"; }}
+                    onMouseLeave={(e) => { e.currentTarget.style.borderColor = "#3a2020"; e.currentTarget.style.color = "#804040"; }}
+                  >
+                    ABORT
+                  </button>
+                )}
+              </div>
             </div>
           )}
 
