@@ -408,13 +408,37 @@ export default function MissionSystem({ onNavigate, initialEncounter, initialPar
   const [meleeMode, setMeleeMode] = useState(null);        // null | 'standard' | 'allout' | 'improvised' — waiting for grid click to pick melee target
   const [roundCounter, setRoundCounter] = useState(0);     // increments each time initiative loops
   const ambushFreeRoundRef = useRef(false); // true during ambush free round — suppresses advanceInitiative
-  // ── Grapple state ──
-  // grappleState: { initiatorType, initiatorIdx, defenderType, defenderIdx, dominance,
+  // ── Grapple state (array — multiple simultaneous grapples) ──
+  // Each entry: { initiatorType, initiatorIdx, defenderType, defenderIdx, dominance,
   //   initiatorStamina, defenderStamina, messyContact, round, grappleActionsUsed: 0 }
   // Characters stay in normal initiative but get 2 grapple-only actions on their turn.
-  const [grappleState, setGrappleState] = useState(null);
-  const grappleStateRef = useRef(null);
-  useEffect(() => { grappleStateRef.current = grappleState; }, [grappleState]);
+  const [grappleStates, setGrappleStates] = useState([]);
+  const grappleStatesRef = useRef([]);
+  useEffect(() => { grappleStatesRef.current = grappleStates; }, [grappleStates]);
+  // Helper: find grapple involving a specific combatant
+  function getGrappleFor(type, index) {
+    return grappleStatesRef.current.find(g =>
+      (g.initiatorType === type && g.initiatorIdx === index) ||
+      (g.defenderType === type && g.defenderIdx === index)
+    ) || null;
+  }
+  // Helper: update a specific grapple in the array
+  function updateGrappleFor(type, index, updater) {
+    setGrappleStates(prev => prev.map(g => {
+      if ((g.initiatorType === type && g.initiatorIdx === index) ||
+          (g.defenderType === type && g.defenderIdx === index)) {
+        return typeof updater === 'function' ? updater(g) : { ...g, ...updater };
+      }
+      return g;
+    }));
+  }
+  // Helper: remove a specific grapple
+  function removeGrappleFor(type, index) {
+    setGrappleStates(prev => prev.filter(g =>
+      !((g.initiatorType === type && g.initiatorIdx === index) ||
+        (g.defenderType === type && g.defenderIdx === index))
+    ));
+  }
   const [terrain, setTerrain] = useState([]); // terrain pieces: platforms + cover barriers
   const terrainRef = useRef([]);
   useEffect(() => { terrainRef.current = terrain; }, [terrain]);
@@ -1201,28 +1225,30 @@ export default function MissionSystem({ onNavigate, initialEncounter, initialPar
                   </div>
 
                   {/* ── GRAPPLE IN-PROGRESS PANEL (only for the character actually grappling) ── */}
-                  {grappleState && (grappleState.grappleActionsUsed || 0) < 2 && (
-                    (grappleState.initiatorType === 'party' && grappleState.initiatorIdx === actIdx) ||
-                    (grappleState.defenderType === 'party' && grappleState.defenderIdx === actIdx)
-                  ) && (() => {
-                    const isInitiator = grappleState.initiatorType === 'party' && grappleState.initiatorIdx === actIdx;
-                    const myStamina = isInitiator ? grappleState.initiatorStamina : grappleState.defenderStamina;
-                    const grappleActions = getAvailableGrappleActions(grappleState.dominance, isInitiator, myStamina);
-                    const actionsLeft = 2 - (grappleState.grappleActionsUsed || 0);
-                    const opponentName = encounter.enemies[grappleState.defenderIdx]?.name || 'Enemy';
+                  {(() => {
+                    const actorGrapple = grappleStates.find(g =>
+                      (g.initiatorType === 'party' && g.initiatorIdx === actIdx) ||
+                      (g.defenderType === 'party' && g.defenderIdx === actIdx)
+                    );
+                    if (!actorGrapple || (actorGrapple.grappleActionsUsed || 0) >= 2) return null;
+                    const isInitiator = actorGrapple.initiatorType === 'party' && actorGrapple.initiatorIdx === actIdx;
+                    const myStamina = isInitiator ? actorGrapple.initiatorStamina : actorGrapple.defenderStamina;
+                    const grappleActions = getAvailableGrappleActions(actorGrapple.dominance, isInitiator, myStamina);
+                    const actionsLeft = 2 - (actorGrapple.grappleActionsUsed || 0);
+                    const opponentName = encounter.enemies[actorGrapple.defenderIdx]?.name || 'Enemy';
                     return (
                       <div style={{ border: '1px solid #8a5a8a', padding: 8, borderRadius: 4, marginBottom: 6 }}>
                         <div style={{ color: '#cc88cc', fontSize: 11, fontFamily: "'Cinzel', serif", marginBottom: 4 }}>
                           GRAPPLE vs {opponentName}
                         </div>
                         <div style={{ color: '#aa88aa', fontSize: 10, marginBottom: 4 }}>
-                          Dominance: {grappleState.dominance} | Stamina: {myStamina} | Grapple Actions: {actionsLeft}/2
+                          Dominance: {actorGrapple.dominance} | Stamina: {myStamina} | Grapple Actions: {actionsLeft}/2
                         </div>
                         <div style={{ display: 'flex', gap: 2, marginBottom: 6 }}>
                           {[0, 1].map(i => (
                             <div key={i} style={{
                               width: 12, height: 12, border: '1px solid #8a5a8a',
-                              background: i < (grappleState.grappleActionsUsed || 0) ? '#8a5a8a' : 'transparent',
+                              background: i < (actorGrapple.grappleActionsUsed || 0) ? '#8a5a8a' : 'transparent',
                               borderRadius: 2
                             }} />
                           ))}
@@ -1244,10 +1270,10 @@ export default function MissionSystem({ onNavigate, initialEncounter, initialPar
                   })()}
 
                   {/* ── SECTIONED ACTIONS (when this character is not grappling) ── */}
-                  {!(grappleState && (
-                    (grappleState.initiatorType === 'party' && grappleState.initiatorIdx === actIdx) ||
-                    (grappleState.defenderType === 'party' && grappleState.defenderIdx === actIdx)
-                  )) && (
+                  {!grappleStates.some(g =>
+                    (g.initiatorType === 'party' && g.initiatorIdx === actIdx) ||
+                    (g.defenderType === 'party' && g.defenderIdx === actIdx)
+                  ) && (
                     <div style={{ display: "flex", gap: 10, flexWrap: "wrap", marginBottom: 6 }}>
 
                       {/* ════════ SECTION 1: BASIC ACTIONS ════════ */}
@@ -1379,7 +1405,7 @@ export default function MissionSystem({ onNavigate, initialEncounter, initialPar
                                     All-Out Attack (+20)
                                   </button>
                                 )}
-                                {!grappleState && validateAction('INITIATE_GRAPPLE', turnState, actorChar, aw).valid && (
+                                {!getGrappleFor('party', actIdx) && validateAction('INITIATE_GRAPPLE', turnState, actorChar, aw).valid && (
                                   <button onClick={() => playerInitiateGrapple()}
                                     style={{ borderColor: "#8a5a8a", color: "#cc88cc", padding: "4px 8px", fontSize: 9 }}>
                                     Grapple
@@ -1395,7 +1421,7 @@ export default function MissionSystem({ onNavigate, initialEncounter, initialPar
                               </button>
                             )}
                             {/* Grapple with ranged weapon */}
-                            {isRanged && !grappleState && validateAction('INITIATE_GRAPPLE', turnState, actorChar, aw).valid && (
+                            {isRanged && !getGrappleFor('party', actIdx) && validateAction('INITIATE_GRAPPLE', turnState, actorChar, aw).valid && (
                               <button onClick={() => playerInitiateGrapple()}
                                 style={{ borderColor: "#8a5a8a", color: "#cc88cc", padding: "4px 8px", fontSize: 9 }}>
                                 Grapple
@@ -2557,15 +2583,14 @@ export default function MissionSystem({ onNavigate, initialEncounter, initialPar
     setGrenadeMode(false);
 
     // Reset grapple actions for incoming actor if they're in a grapple
-    const gs = grappleStateRef.current;
-    if (gs) {
-      const incoming = init[nextTurn];
-      const isInGrapple = incoming && (
-        (incoming.type === gs.initiatorType && incoming.index === gs.initiatorIdx) ||
-        (incoming.type === gs.defenderType && incoming.index === gs.defenderIdx)
+    const incoming = init[nextTurn];
+    if (incoming) {
+      const incomingGrapple = grappleStatesRef.current.find(g =>
+        (g.initiatorType === incoming.type && g.initiatorIdx === incoming.index) ||
+        (g.defenderType === incoming.type && g.defenderIdx === incoming.index)
       );
-      if (isInGrapple) {
-        setGrappleState(prev => prev ? ({ ...prev, grappleActionsUsed: 0 }) : null);
+      if (incomingGrapple) {
+        updateGrappleFor(incoming.type, incoming.index, { grappleActionsUsed: 0 });
       }
     }
 
@@ -2654,7 +2679,7 @@ export default function MissionSystem({ onNavigate, initialEncounter, initialPar
       round: 0,
       grappleActionsUsed: 1, // initiating the grapple costs 1 of your 2 grapple actions this turn
     };
-    setGrappleState(newGrapple);
+    setGrappleStates(prev => [...prev, newGrapple]);
     setTurnState(prev => ({
       ...prev,
       half_actions_spent: 2, // lock out normal actions — grapple replaces them
@@ -2667,9 +2692,9 @@ export default function MissionSystem({ onNavigate, initialEncounter, initialPar
     }]);
   }
 
-  // End grapple and return both characters to normal actions
-  function endGrapple() {
-    setGrappleState(null);
+  // End a specific grapple involving this combatant
+  function endGrapple(type, index) {
+    removeGrappleFor(type, index);
     setTurnState(prev => ({ ...prev, in_grapple: false, grapple_partner: null }));
   }
 
@@ -2677,22 +2702,26 @@ export default function MissionSystem({ onNavigate, initialEncounter, initialPar
   function spendGrappleAction(gs, updatedFields = {}) {
     const newUsed = (gs.grappleActionsUsed || 0) + 1;
     const updated = { ...gs, ...updatedFields, grappleActionsUsed: newUsed };
+    // Update the specific grapple in the array
+    setGrappleStates(prev => prev.map(g =>
+      (g.initiatorType === gs.initiatorType && g.initiatorIdx === gs.initiatorIdx &&
+       g.defenderType === gs.defenderType && g.defenderIdx === gs.defenderIdx)
+        ? updated : g
+    ));
     if (newUsed >= 2) {
       // Both grapple actions spent — advance normal initiative
-      setGrappleState(updated);
       setTimeout(() => advanceInitiative(currentTurn, initiativeOrder, gridPositions.party, gridPositions.enemies, enemyWoundsRef.current), 1000);
-    } else {
-      setGrappleState(updated);
     }
   }
 
   // AI: resolve enemy grapple actions (called during enemyTurn when enemy is in grapple)
-  function resolveEnemyGrappleActions() {
-    const gs = grappleStateRef.current;
+  function resolveEnemyGrappleActions(enemyIndex) {
+    const gs = getGrappleFor('enemy', enemyIndex);
     if (!gs) return;
 
     const char = party[gs.initiatorIdx];
-    const enemy = encounter.enemies[gs.defenderIdx];
+    const currentEncounter = encounterRef.current || encounter;
+    const enemy = currentEncounter.enemies[gs.defenderIdx];
     const isInitiator = gs.initiatorType === 'enemy';
     const myDom = isInitiator ? gs.dominance : -gs.dominance;
     const myStamina = isInitiator ? gs.initiatorStamina : gs.defenderStamina;
@@ -2702,22 +2731,21 @@ export default function MissionSystem({ onNavigate, initialEncounter, initialPar
 
     // Enemy gets 2 grapple actions
     for (let action = 0; action < 2; action++) {
-      if (!grappleStateRef.current) return; // Grapple ended mid-resolution
+      // Check grapple still exists
+      if (!getGrappleFor('enemy', enemyIndex)) return;
 
       const availableActions = getAvailableGrappleActions(currentGs.dominance, isInitiator, myStamina);
 
       if (myDom < -2) {
-        // Losing badly — try to break free
         const result = resolveBreakAttempt(enemy, char);
         allLog.push(...result.log);
         if (result.success) {
           allLog.push({ type: 'enemy', text: `${enemy.name} breaks free from the grapple!` });
           setCombatLog(prev => [...prev, ...allLog]);
-          endGrapple();
+          endGrapple('enemy', enemyIndex);
           return;
         }
       } else if (availableActions.length > 0 && myDom >= 2) {
-        // Winning — use best available action
         const bestAction = availableActions[availableActions.length - 1];
         const sb = Math.floor((enemy.stats?.strength || 20) / 10);
         let dmg = 0;
@@ -2732,7 +2760,7 @@ export default function MissionSystem({ onNavigate, initialEncounter, initialPar
           eventBridge.emit('combat-float-text', { targetType: 'party', targetIndex: gs.initiatorIdx, text: `-${dmg}`, color: '#ff4444' });
           setPartyWounds(prev => { const n = [...prev]; n[gs.initiatorIdx] = (n[gs.initiatorIdx] || 0) + dmg; return n; });
           setCombatLog(prev => [...prev, ...allLog]);
-          endGrapple();
+          endGrapple('enemy', enemyIndex);
           return;
         } else if (['Submission', 'Knock Unconscious', 'Execution'].includes(bestAction)) {
           dmg = Math.max(5, Math.floor(Math.random() * 10) + 5 + Math.floor((enemy.stats?.strength || 20) / 5));
@@ -2740,13 +2768,12 @@ export default function MissionSystem({ onNavigate, initialEncounter, initialPar
           eventBridge.emit('combat-float-text', { targetType: 'party', targetIndex: gs.initiatorIdx, text: `-${dmg}`, color: '#ff2222' });
           setPartyWounds(prev => { const n = [...prev]; n[gs.initiatorIdx] = (n[gs.initiatorIdx] || 0) + dmg; return n; });
           setCombatLog(prev => [...prev, ...allLog]);
-          endGrapple();
+          endGrapple('enemy', enemyIndex);
           return;
         } else {
           allLog.push({ type: 'enemy', text: `${enemy.name} uses ${bestAction}.` });
         }
       } else {
-        // Neutral — wrestle for dominance
         const result = resolveGrappleTurn(
           isInitiator ? enemy : char,
           isInitiator ? char : enemy,
@@ -2765,17 +2792,24 @@ export default function MissionSystem({ onNavigate, initialEncounter, initialPar
 
     setCombatLog(prev => [...prev, ...allLog]);
     // Drain stamina each round the enemy acts
-    setGrappleState({
+    const finalGs = {
       ...currentGs,
       grappleActionsUsed: 2,
       round: currentGs.round + 1,
       initiatorStamina: Math.max(0, currentGs.initiatorStamina - 1),
       defenderStamina: Math.max(0, currentGs.defenderStamina - 1),
-    });
+    };
+    setGrappleStates(prev => prev.map(g =>
+      (g.initiatorType === gs.initiatorType && g.initiatorIdx === gs.initiatorIdx &&
+       g.defenderType === gs.defenderType && g.defenderIdx === gs.defenderIdx)
+        ? finalGs : g
+    ));
   }
 
   function resolvePlayerGrappleTurn() {
-    const gs = grappleStateRef.current;
+    const actor = initiativeOrder[currentTurn];
+    if (!actor || actor.type !== 'party') return;
+    const gs = getGrappleFor('party', actor.index);
     if (!gs || (gs.grappleActionsUsed || 0) >= 2) return;
     const char = party[gs.initiatorIdx];
     const enemy = encounter.enemies[gs.defenderIdx];
@@ -2791,7 +2825,6 @@ export default function MissionSystem({ onNavigate, initialEncounter, initialPar
 
     setCombatLog(prev => [...prev, ...result.log]);
 
-    // Check for pin/submission at ±5
     if (Math.abs(result.newDominance) >= 5) {
       const winner = result.newDominance >= 5 ? char.name : enemy.name;
       const loser = result.newDominance >= 5 ? enemy.name : char.name;
@@ -2802,7 +2835,9 @@ export default function MissionSystem({ onNavigate, initialEncounter, initialPar
   }
 
   function playerBreakGrapple() {
-    const gs = grappleStateRef.current;
+    const actor = initiativeOrder[currentTurn];
+    if (!actor || actor.type !== 'party') return;
+    const gs = getGrappleFor('party', actor.index);
     if (!gs || (gs.grappleActionsUsed || 0) >= 2) return;
     const char = party[gs.initiatorIdx];
     const enemy = encounter.enemies[gs.defenderIdx];
@@ -2812,7 +2847,7 @@ export default function MissionSystem({ onNavigate, initialEncounter, initialPar
 
     if (result.success) {
       setCombatLog(prev => [...prev, { type: 'player', text: `${char.name} breaks free from ${enemy.name}!` }]);
-      endGrapple();
+      endGrapple('party', actor.index);
       setTimeout(() => advanceInitiative(currentTurn, initiativeOrder, gridPositions.party, gridPositions.enemies, enemyWoundsRef.current), 1000);
       return;
     }
@@ -2821,7 +2856,9 @@ export default function MissionSystem({ onNavigate, initialEncounter, initialPar
   }
 
   function playerReachSidearm() {
-    const gs = grappleStateRef.current;
+    const actor = initiativeOrder[currentTurn];
+    if (!actor || actor.type !== 'party') return;
+    const gs = getGrappleFor('party', actor.index);
     if (!gs || (gs.grappleActionsUsed || 0) >= 2) return;
     const char = party[gs.initiatorIdx];
     const enemy = encounter.enemies[gs.defenderIdx];
@@ -2843,7 +2880,9 @@ export default function MissionSystem({ onNavigate, initialEncounter, initialPar
   }
 
   function playerGrappleAction(actionName) {
-    const gs = grappleStateRef.current;
+    const actor = initiativeOrder[currentTurn];
+    if (!actor || actor.type !== 'party') return;
+    const gs = getGrappleFor('party', actor.index);
     if (!gs || (gs.grappleActionsUsed || 0) >= 2) return;
     const char = party[gs.initiatorIdx];
     const enemy = encounter.enemies[gs.defenderIdx];
@@ -2902,7 +2941,7 @@ export default function MissionSystem({ onNavigate, initialEncounter, initialPar
         eventBridge.emit('combat-death', { targetType: 'enemy', targetIndex: enemyIdx });
         log.push({ type: 'player', text: `The ${enemy.name} is DEFEATED!` });
         setCombatLog(prev => [...prev, ...log]);
-        endGrapple();
+        endGrapple('party', actor.index);
         setTimeout(() => advanceInitiative(currentTurn, initiativeOrder, gridPositions.party, gridPositions.enemies, newEnemyWounds), 1000);
         return;
       }
@@ -2911,7 +2950,7 @@ export default function MissionSystem({ onNavigate, initialEncounter, initialPar
     setCombatLog(prev => [...prev, ...log]);
 
     if (endsGrapple) {
-      endGrapple();
+      endGrapple('party', actor.index);
       setTimeout(() => advanceInitiative(currentTurn, initiativeOrder, gridPositions.party, gridPositions.enemies, enemyWoundsRef.current), 1000);
     } else {
       spendGrappleAction(gs);
@@ -3381,10 +3420,10 @@ export default function MissionSystem({ onNavigate, initialEncounter, initialPar
     }
 
     // If this enemy is in a grapple, resolve grapple actions instead of normal turn
-    const gs = grappleStateRef.current;
-    if (gs && gs.defenderType === 'enemy' && gs.defenderIdx === actor.index) {
+    const enemyGrapple = getGrappleFor('enemy', actor.index);
+    if (enemyGrapple) {
       setCombatLog(prev => [...prev, { type: 'enemy', text: `${enemy.name} struggles in the grapple!` }]);
-      resolveEnemyGrappleActions();
+      resolveEnemyGrappleActions(actor.index);
       setTimeout(() => advanceInitiative(actorIndex, init, partyPos, enemyPosList, enemyWoundsRef.current), 1500);
       return;
     }
@@ -3703,6 +3742,7 @@ export default function MissionSystem({ onNavigate, initialEncounter, initialPar
     setEnemyPinned([]);
     setPartyProne([]);
     setEnemyProne([]);
+    setGrappleStates([]);
     setPartyReactionsUsed([]);
     setEnemyReactionsUsed([]);
     setRemainingAction('full');
